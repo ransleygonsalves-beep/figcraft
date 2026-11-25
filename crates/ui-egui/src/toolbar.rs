@@ -423,6 +423,7 @@ fn edit_toolbar(app: &mut FigApp, ui: &mut Ui, current: VTool) {
             VTool::Lasso => Icon::Lasso,
             VTool::Cut => Icon::Cut,
             VTool::Eraser => Icon::Eraser,
+            VTool::Smooth => Icon::Smooth,
             VTool::Width => Icon::VariableWidth,
         };
         let resp = tool_cell(ui, &t, r, ("vtool", tool.id()), icon, active, &tip);

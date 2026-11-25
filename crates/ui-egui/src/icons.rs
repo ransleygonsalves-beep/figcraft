@@ -168,6 +168,8 @@ icons! {
     Variable,
     Clock,
     Eraser,
+    /// Smooth: a jagged line that runs on as a smooth wave, under a round brush.
+    Smooth,
     /// Variable width: a stroke swelling in the middle with a width handle above and below.
     VariableWidth,
     /// Shape builder: merge regions (and the tool).

@@ -962,6 +962,93 @@ pub fn erase(net: &mut VectorNetwork, c: Point, r: f64) -> bool {
     changed
 }
 
+/// How far one dab of the Smooth tool moves a point towards the middle of its two neighbours at
+/// the brush's centre (less towards its edge, none past it).
+const SMOOTH_PULL: f64 = 0.35;
+
+/// The Smooth tool: one dab of a round brush at `c` with radius `r` (local units). Each point
+/// inside it that lies along a path (two segments, to two other points) moves part of the way
+/// towards the middle of its neighbours, which irons out wobbles, and gets smooth handles along
+/// them; then each of those points that lies about midway between its neighbours by now, and that
+/// the curve can do without (running within `tol` of where it ran), is removed. Ends of open paths and junctions of three or more segments stay as they are.
+/// Returns whether anything changed.
+pub fn smooth(net: &mut VectorNetwork, c: Point, r: f64, tol: f64) -> bool {
+    if !(r.is_finite() && r > 0.0 && finite(c.to_vec2())) {
+        return false;
+    }
+    // Where each point under the brush goes, worked out from where the points were before the dab.
+    let moves: Vec<(usize, Point)> = net
+        .vertices
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| {
+            let d = (v.point() - c).hypot();
+            if d >= r {
+                return None;
+            }
+            let (p1, p2) = path_neighbours(net, i)?;
+            Some((i, v.point().lerp(p1.midpoint(p2), SMOOTH_PULL * (1.0 - d / r))))
+        })
+        .collect();
+    if moves.is_empty() {
+        return false;
+    }
+    for (i, to) in &moves {
+        if let Some(v) = net.vertices.get_mut(*i) {
+            (v.x, v.y) = (to.x, to.y);
+        }
+    }
+    for (i, _) in &moves {
+        auto_smooth(net, *i);
+    }
+    // Highest index first: removing a point renumbers only the points after it. Only a point that
+    // already lies about midway between its neighbours goes: one dropped while the path still
+    // wobbles would keep the wobble in the curve healed over it.
+    let mut ids: Vec<usize> = moves.iter().map(|m| m.0).collect();
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    for vi in ids {
+        let settled =
+            path_neighbours(net, vi).zip(net.vertices.get(vi).map(Vertex::point)).is_some_and(|((p1, p2), p)| (p - p1.midpoint(p2)).hypot() <= tol);
+        if settled && removable(net, vi, tol) {
+            delete_vertices(net, &[vi], true);
+        }
+    }
+    true
+}
+
+/// The two neighbours of point `vi` when it lies along a path: exactly two segments, to two other
+/// points.
+fn path_neighbours(net: &VectorNetwork, vi: usize) -> Option<(Point, Point)> {
+    let inc = net.incident(vi);
+    let [(s1, a1), (s2, a2)] = inc.as_slice() else { return None };
+    let other = |s: usize, at_a: bool| net.segments.get(s).map(|x| if at_a { x.b } else { x.a });
+    let (o1, o2) = (other(*s1, *a1)?, other(*s2, *a2)?);
+    if o1 == o2 || o1 == vi || o2 == vi {
+        return None;
+    }
+    Some((net.vertices.get(o1)?.point(), net.vertices.get(o2)?.point()))
+}
+
+/// Whether point `vi` can go with the curve over it (as [`delete_vertices`] heals it) staying
+/// within `tol` of the two segments it replaces. A closed shape keeps at least three points.
+fn removable(net: &VectorNetwork, vi: usize, tol: f64) -> bool {
+    let inc = net.incident(vi);
+    let [(s1, _), (s2, _)] = inc.as_slice() else { return false };
+    let (Some(x), Some(y)) = (net.segments.get(*s1).copied(), net.segments.get(*s2).copied()) else { return false };
+    let o1 = if x.a == vi { (x.b, x.tb) } else { (x.a, x.ta) };
+    let o2 = if y.a == vi { (y.b, y.tb) } else { (y.a, y.ta) };
+    if o1.0 == o2.0 || parts(net).iter().find(|p| p.contains(&vi)).is_none_or(|p| p.len() <= 3) {
+        return false;
+    }
+    // The curve `delete_vertices` would put in their place.
+    let curved = !(x.is_straight() && y.is_straight());
+    let (ta, tb) = if curved { heal_handles(net, vi, o1, o2).unwrap_or((o1.1, o2.1)) } else { (o1.1, o2.1) };
+    let (Some(a), Some(b)) = (net.vertices.get(o1.0).map(Vertex::point), net.vertices.get(o2.0).map(Vertex::point)) else { return false };
+    let healed = CubicBez::new(a, a + tvec(ta), b + tvec(tb), b);
+    let (Some(c1), Some(c2)) = (net.cubic(*s1), net.cubic(*s2)) else { return false };
+    (1..8).map(|k| f64::from(k) / 8.0).flat_map(|t| [c1.eval(t), c2.eval(t)]).all(|p| healed.nearest(p, 1e-6).distance_sq <= tol * tol)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

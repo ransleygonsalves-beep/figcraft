@@ -870,6 +870,14 @@ fn draw(p: &P, icon: Icon) {
             p.line(5.5, 7.0, 9.5, 11.0);
             p.line(7.0, 13.5, 14.0, 13.5);
         }
+        Smooth => {
+            // A jagged stroke on the left running on as a smooth wave on the right, with the round
+            // brush over where one turns into the other.
+            p.poly(&[(1.5, 10.5), (3.0, 7.5), (4.5, 11.0), (6.0, 7.5)], false);
+            let wave: Vec<(f32, f32)> = (0..=10).map(|i| i as f32 / 10.0).map(|f| (6.0 + 8.0 * f, 9.25 - 2.0 * (PI * f).sin())).collect();
+            p.path(&wave, false);
+            p.circle(6.0, 5.0, 3.0);
+        }
         VariableWidth => {
             // A lens-shaped stroke, thin at both ends, and a width handle on either side of its
             // widest point.
