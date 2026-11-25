@@ -493,7 +493,7 @@ fn detail_bounds(ui: &Ui) -> Option<figcraft_geom::Rect> {
 }
 
 #[test]
-fn the_detail_is_kept_while_nothing_changes_and_made_again_when_the_frame_does() {
+fn the_detail_is_kept_while_nothing_changes_and_redrawn_when_the_frame_does() {
     let mut ui = tall_hidpi(16_384);
     let tex_id = |ui: &Ui| ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.tex.id()));
     let first = tex_id(&ui).expect("a detail is drawn");
@@ -508,7 +508,45 @@ fn the_detail_is_kept_while_nothing_changes_and_made_again_when_the_frame_does()
     let child = ui.app.session.doc().unwrap().node(rect).unwrap().children[0];
     ui.run("node.set", json!({"id": child, "props": {"x": 120}}));
     ui.frames(3, Vec::new);
-    assert_ne!(tex_id(&ui), Some(first), "an edit renders the detail again");
+    // A small edit redraws its own area into the same texture.
+    let shows = ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().and_then(|(_, d)| d.src.world_bounds(child)));
+    assert_eq!(shows, ui.app.session.doc().unwrap().world_bounds(child), "the detail shows the edit");
+}
+
+/// A change to a small part of a frame redraws only that part, into the frame's texture: the
+/// pixels it renders are the ones a render of the whole frame has there.
+#[test]
+fn a_patched_area_lines_up_with_the_whole_frames_pixels() {
+    let mut s = figcraft_engine::Session::new();
+    let frame = id(&s.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 3000, "props": {"fill": "#FFFFFF"}})).unwrap());
+    let button = id(&s
+        .execute(
+            "node.create",
+            &json!({"type": "ellipse", "parent": frame, "x": 101.3, "y": 207.7, "width": 90.5, "height": 41.2, "props": {"fill": "#3366FF"}}),
+        )
+        .unwrap());
+    let from = s.doc().unwrap().clone();
+    s.execute("node.set", &json!({"id": button, "props": {"fill": "#FF3300", "x": 113.9}})).unwrap();
+    let to = s.doc().unwrap().clone();
+    let draw::Change::Area(area) = draw::change(&from, &to, frame) else { panic!("a small change") };
+    let bounds = figcraft_render::export_bounds(&to, frame).unwrap();
+    let scale = 0.731;
+    let whole = figcraft_render::render_node(&to, frame, scale).unwrap();
+    let size = [whole.width() as usize, whole.height() as usize];
+    let (pos, snapped) = actions::snap(area, bounds, scale, size).unwrap();
+    let part = figcraft_render::render_area_at(&to, &[frame], snapped, scale, 0.0).unwrap();
+    let (w, h) = (((snapped.x1 - snapped.x0) * scale).round() as usize, ((snapped.y1 - snapped.y0) * scale).round() as usize);
+    let mut worst = 0u8;
+    for y in 0..h {
+        for x in 0..w {
+            let a = part.pixel(x as u32, y as u32).unwrap();
+            let b = whole.pixel((pos[0] + x) as u32, (pos[1] + y) as u32).unwrap();
+            for (p, q) in [(a.red(), b.red()), (a.green(), b.green()), (a.blue(), b.blue()), (a.alpha(), b.alpha())] {
+                worst = worst.max(p.abs_diff(q));
+            }
+        }
+    }
+    assert!(worst <= 2, "the patch differs from the whole render by {worst}");
 }
 
 #[test]
@@ -723,4 +761,56 @@ fn without_a_device_fixed_and_sticky_layers_keep_to_the_window_to_the_end_of_the
     assert!(on_screen(page).min.y < area.min.y - 3000.0, "scrolled to the end of the page: {:?}", on_screen(page));
     assert!((on_screen(header).min.y - area.min.y).abs() < 1.0, "the fixed header stays at the window's top: {:?}", on_screen(header));
     assert!((on_screen(sticky).min.y - area.min.y).abs() < 1.0, "the sticky bar holds at the window's top: {:?}", on_screen(sticky));
+}
+
+/// A Smart Animate inside a tall frame renders only the area it changes (#ticker lag), never more
+/// than it needs and never past the frame; a change to the frame itself, or to most of it, draws
+/// the whole frame.
+#[test]
+fn a_change_inside_a_frame_touches_only_its_own_area() {
+    let mut s = figcraft_engine::Session::new();
+    let frame = id(&s.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 7000})).unwrap());
+    let strip =
+        id(&s.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 0, "y": 3000, "width": 1440, "height": 60})).unwrap());
+    let card =
+        id(&s.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 100, "y": 200, "width": 300, "height": 200})).unwrap());
+    let from = s.doc().unwrap().clone();
+    s.execute("node.set", &json!({"id": strip, "props": {"x": -400, "fill": "#FF0000"}})).unwrap();
+    let to = s.doc().unwrap().clone();
+
+    let area = draw::changed_area(&from, &to, frame).expect("a strip is a small part of the page");
+    let whole = to.world_render_bounds(frame).unwrap();
+    let (before, after) = (from.world_render_bounds(strip).unwrap(), to.world_render_bounds(strip).unwrap());
+    let inside = |r: figcraft_geom::Rect, a: figcraft_geom::Rect| a.x0 <= r.x0 && a.y0 <= r.y0 && a.x1 >= r.x1 && a.y1 >= r.y1;
+    assert!(inside(before.intersect(whole), area) && inside(after.intersect(whole), area), "covers where it was and where it is");
+    assert!(inside(area, whole), "never past the frame");
+    assert!(area.intersect(to.world_render_bounds(card).unwrap()).area() == 0.0, "leaves the unchanged card out");
+    assert!(area.area() < whole.area() / 10.0);
+
+    assert_eq!(draw::changed_area(&to, &to, frame), None, "nothing changed");
+    s.execute("node.set", &json!({"id": frame, "props": {"fill": "#00FF00"}})).unwrap();
+    assert_eq!(draw::changed_area(&to, s.doc().unwrap(), frame), None, "the frame itself changed");
+    let mut big = to.clone();
+    let card_node = big.get_mut(card).unwrap();
+    (card_node.width, card_node.height) = (1440.0, 6000.0);
+    assert_eq!(draw::changed_area(&to, &big, frame), None, "most of the frame changed");
+}
+
+/// At 100% without a device, a page taller than the window pans to the window's edges: scrolled to
+/// its end it meets the window's bottom, with no band of padding under it.
+#[test]
+fn a_page_taller_than_the_window_pans_to_the_window_edges() {
+    use super::layout::{FULL, layout};
+    let mut d = Document::new("t");
+    let page = d.add_page("Page 1");
+    let a = d.create(page, NodeKind::Frame, "Long", 0.0, 0.0, 800.0, 4000.0).unwrap();
+    let mut p = player_on(d, a);
+    p.view.scale = PresentScale::Actual;
+    let area = Rect::from_min_max(pos2(0.0, 40.0), pos2(1440.0, 900.0));
+    let l = layout(&mut p, area, FULL).unwrap();
+    assert!((l.screen.min.y - area.min.y).abs() < 1.0, "at the start the page meets the window's top: {:?}", l.screen);
+    assert!(l.screen.min.x > area.min.x + FULL.pad, "a page narrower than the window keeps its sides centred");
+    p.pan = Some((0.0, f64::MAX));
+    let l = layout(&mut p, area, FULL).unwrap();
+    assert!((l.screen.max.y - area.max.y).abs() < 1.0, "at the end the page meets the window's bottom: {:?}", l.screen);
 }

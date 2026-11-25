@@ -67,6 +67,7 @@ fn without_a_device_a_responsive_frame_fills_the_window_at_100_percent() {
     let (w, ..) = wide(&mut s);
     s.execute("proto.settings", &json!({"responsive": true})).unwrap();
     let mut u = Ui::new(s);
+    u.run("proto.presentOptions", json!({"scale": "fit"}));
     u.run("proto.present", json!({"start": w}));
     let p = presenter(&u);
     // The window is 1440×900; the title and tab bars take 80.

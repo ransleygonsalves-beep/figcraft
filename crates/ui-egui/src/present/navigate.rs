@@ -164,7 +164,7 @@ impl Presenter {
         self.anim = if matches!(transition, Transition::Instant) || dur <= 0.0 {
             None
         } else {
-            Some(Anim { from_doc, from_frame: self.current, from_tex, transition, start: now, dur, easing, follow: None })
+            Some(Anim { from_doc, from_frame: self.current, from_tex, transition, start: now, dur, easing, follow: None, region: None })
         };
     }
 

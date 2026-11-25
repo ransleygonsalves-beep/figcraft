@@ -118,7 +118,7 @@ pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<La
     let pins = base
         .node(p.current)
         .is_some_and(|n| n.children.iter().any(|c| base.node(*c).is_some_and(|c| c.visible && c.scroll_position != ScrollPosition::Scrolls)));
-    let view = if chrome.pane { PresentView::default() } else { p.view };
+    let view = if chrome.pane { PresentView { scale: PresentScale::Fit, ..PresentView::default() } } else { p.view };
     // Custom sizes are just a screen: no body.
     let body = device.filter(|d| view.device_frame && !d.colors.is_empty());
     let pad = if !fills && matches!(view.scale, PresentScale::Fit | PresentScale::Actual) { chrome.pad } else { 0.0 };
@@ -150,8 +150,13 @@ pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<La
     // Without a device, a frame with fixed or sticky layers takes the window as its screen: what
     // doesn't fit scrolls in the frame, as on a device, so those layers keep to the window (#2430).
     // Other frames pan as one picture, drawn once.
+    // Along an axis where it doesn't fit inside the padding, the prototype runs to the window's
+    // edges: a page scrolled to its end meets the window's edge instead of a band of padding.
+    let natural = outer((sw, sh), scale).3;
+    let x_room = if natural.x - avail.width() > 0.5 { (area.min.x, area.width()) } else { (avail.min.x, avail.width()) };
+    let y_room = if natural.y - avail.height() > 0.5 { (area.min.y, area.height()) } else { (avail.min.y, avail.height()) };
     let fit = |len: f64, room: f32| if len * scale - f64::from(room) > 0.5 { f64::from(room) / scale } else { len };
-    let window = (device.is_none() && pins).then(|| (fit(sw, avail.width()), fit(sh, avail.height()))).filter(|w| *w != (sw, sh));
+    let window = (device.is_none() && pins).then(|| (fit(sw, x_room.1), fit(sh, y_room.1))).filter(|w| *w != (sw, sh));
     if p.window != window {
         p.window = window;
         p.rev += 1;
@@ -162,7 +167,7 @@ pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<La
     p.zoom = scale;
     // What's bigger than the window pans: starting centred across and at the top.
     let over = |d: f32| if d > 0.5 { d } else { 0.0 };
-    let excess = vec2(over(whole.x - avail.width()), over(whole.y - avail.height()));
+    let excess = vec2(over(whole.x - x_room.1), over(whole.y - y_room.1));
     p.pan_range = (f64::from(excess.x), f64::from(excess.y));
     // While a drag or fling moves the view it may stretch past the ends; otherwise it stays in range.
     let live = matches!(p.drag_scroll, Some((Scroller::View, _))) || p.fling.is_some_and(|f| f.target == Scroller::View);
@@ -171,7 +176,7 @@ pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<La
     }
     let pan = p.offset(Scroller::View);
     let along = |excess: f32, min: f32, centre: f32, len: f32, pan: f64| if excess > 0.0 { min - pan as f32 } else { centre - len / 2.0 };
-    let min = pos2(along(excess.x, avail.min.x, area.center().x, whole.x, pan.0), along(excess.y, avail.min.y, area.center().y, whole.y, pan.1));
+    let min = pos2(along(excess.x, x_room.0, area.center().x, whole.x, pan.0), along(excess.y, y_room.0, area.center().y, whole.y, pan.1));
     let screen = Rect::from_min_size(min + vec2(x, top), size);
     let place = Place::centered(fb, screen.center(), scale);
     let place_overlay = |o: &OverlayState| {

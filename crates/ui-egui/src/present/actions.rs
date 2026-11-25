@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::{
     Action, Document, Easing, FrameTex, NodeId, NodeKind, OverlayAnchor, OverlayPosition, OverlayState, Presenter, Rect, ScrollAnim, Temp,
     Transition, Trigger, Waiting,
@@ -292,10 +294,10 @@ impl Presenter {
         let (t, clock) = self.frame_clock(ctx, doc, id, now);
         let key = (self.rev, px.to_bits(), clock.map_or(0, |c| c.0));
         let covers = |b: &figcraft_geom::Rect| b.x0 <= visible.x0 && b.y0 <= visible.y0 && b.x1 >= visible.x1 && b.y1 >= visible.y1;
-        if let Some((did, d)) = &self.detail
+        if let Some((did, d)) = &mut self.detail
             && *did == id
-            && d.key == key
             && covers(&d.bounds)
+            && (d.key == key || patch(d, key, doc, id, t))
         {
             return Some(d.clone());
         }
@@ -304,10 +306,11 @@ impl Presenter {
         }
         let side = ctx.input(|i| i.max_texture_side) as f64 - 2.0;
         let rect = detail_plan(whole, visible, px, side)?;
-        let pix = figcraft_render::render_area_at(doc, &[id], rect, texture_scale_for(rect, px, side), t)?;
+        let scale = texture_scale_for(rect, px, side);
+        let pix = figcraft_render::render_area_at(doc, &[id], rect, scale, t)?;
         let img = crate::render_worker::screen_image(&pix, doc.color_profile);
         let tex = ctx.load_texture(format!("present-detail-{}", id.0), img, egui::TextureOptions::LINEAR);
-        let ft = FrameTex { key, tex, bounds: rect };
+        let ft = FrameTex { key, tex, bounds: rect, scale, src: Arc::new(doc.clone()) };
         self.detail = Some((id, ft.clone()));
         Some(ft)
     }
@@ -315,19 +318,77 @@ impl Presenter {
     pub(super) fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64) -> Option<FrameTex> {
         let (t, clock) = self.frame_clock(ctx, doc, id, now);
         let key = (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0));
-        if let Some(t) = self.textures.get(&id)
-            && t.key == key
+        if let Some(ft) = self.textures.get_mut(&id)
+            && (ft.key == key || patch(ft, key, doc, id, t))
         {
-            return Some(t.clone());
+            return Some(ft.clone());
         }
         let bounds = figcraft_render::export_bounds(doc, id)?;
-        let pix = figcraft_render::render_node_at(doc, id, texture_scale(ctx, bounds, px_scale), t)?;
+        let scale = texture_scale(ctx, bounds, px_scale);
+        let pix = figcraft_render::render_node_at(doc, id, scale, t)?;
         let img = crate::render_worker::screen_image(&pix, doc.color_profile);
         let tex = ctx.load_texture(format!("present-{}", id.0), img, egui::TextureOptions::LINEAR);
-        let ft = FrameTex { key, tex, bounds };
+        let ft = FrameTex { key, tex, bounds, scale, src: Arc::new(doc.clone()) };
         self.textures.insert(id, ft.clone());
         Some(ft)
     }
+}
+
+/// Bring `ft` (frame `id` as its `src` showed it) up to `doc` at revision `key` by rendering again
+/// only the area that changed, into the same texture: a hover that swaps a button doesn't render
+/// the whole page again. False when that won't do (another scale or animation frame, or a change
+/// to all or most of the frame): then it is rendered whole.
+fn patch(ft: &mut FrameTex, key: (u64, u64, u64), doc: &Document, id: NodeId, t: f64) -> bool {
+    if (ft.key.1, ft.key.2) != (key.1, key.2) {
+        return false;
+    }
+    let area = match super::draw::change(&ft.src, doc, id) {
+        super::draw::Change::Whole => return false,
+        super::draw::Change::Nothing => None,
+        super::draw::Change::Area(a) => Some(a.intersect(ft.bounds)),
+    };
+    if let Some(area) = area.filter(|a| a.width() > 0.0 && a.height() > 0.0)
+        && let Some((pos, snapped)) = snap(area, ft.bounds, ft.scale, ft.tex.size())
+    {
+        let Some(pix) = figcraft_render::render_area_at(doc, &[id], snapped, ft.scale, t) else { return false };
+        let img = crate::render_worker::screen_image(&pix, doc.color_profile);
+        let w = ((snapped.x1 - snapped.x0) * ft.scale).round() as usize;
+        let h = ((snapped.y1 - snapped.y0) * ft.scale).round() as usize;
+        let Some(img) = crop(img, w, h) else { return false };
+        ft.tex.set_partial(pos, img, egui::TextureOptions::LINEAR);
+    }
+    ft.key = key;
+    ft.src = Arc::new(doc.clone());
+    true
+}
+
+/// `area` (page units) out to whole pixels of a texture of `size` covering `bounds` at `scale`:
+/// where it starts in the texture, and the page area those pixels cover (None: no pixels).
+pub(super) fn snap(
+    area: figcraft_geom::Rect,
+    bounds: figcraft_geom::Rect,
+    scale: f64,
+    size: [usize; 2],
+) -> Option<([usize; 2], figcraft_geom::Rect)> {
+    let (b, s) = (bounds, scale);
+    let x0 = ((area.x0 - b.x0) * s).floor().max(0.0);
+    let y0 = ((area.y0 - b.y0) * s).floor().max(0.0);
+    let x1 = ((area.x1 - b.x0) * s).ceil().min(size[0] as f64);
+    let y1 = ((area.y1 - b.y0) * s).ceil().min(size[1] as f64);
+    (x1 > x0 && y1 > y0).then(|| ([x0 as usize, y0 as usize], figcraft_geom::Rect::new(b.x0 + x0 / s, b.y0 + y0 / s, b.x0 + x1 / s, b.y0 + y1 / s)))
+}
+
+/// The top-left `w`×`h` of `img` (rounding can make a rendered area a pixel bigger).
+fn crop(img: egui::ColorImage, w: usize, h: usize) -> Option<egui::ColorImage> {
+    let [iw, ih] = img.size;
+    if iw < w || ih < h {
+        return None;
+    }
+    if (iw, ih) == (w, h) {
+        return Some(img);
+    }
+    let pixels = (0..h).flat_map(|y| img.pixels[y * iw..y * iw + w].iter().copied()).collect();
+    Some(egui::ColorImage::new([w, h], pixels))
 }
 
 /// The most pixels a presented frame's texture holds (bigger prototypes, at 100% or filling the
