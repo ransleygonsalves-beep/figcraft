@@ -1,5 +1,5 @@
 //! Vector edit mode: editing a vector network's points, segments and bezier handles on the canvas,
-//! with its own tools (move, pen, bend, paint bucket, lasso, cut).
+//! with its own tools (move, pen, bend, paint bucket, lasso, cut, eraser, smooth, variable width).
 //!
 //! Entering edit mode on a non-vector shape converts it to a vector first (like the incumbent).
 //! Vertex coordinates are node-local; after each edit the node is re-fitted so its box wraps the
@@ -17,6 +17,8 @@ mod position_tests;
 pub mod regions;
 #[cfg(test)]
 mod regions_tests;
+#[cfg(test)]
+mod smooth_tests;
 #[cfg(test)]
 mod tests;
 pub mod transform;
@@ -52,12 +54,15 @@ pub enum VTool {
     Lasso,
     Cut,
     Eraser,
+    /// A brush that smooths the path it is dragged along and drops the points it can do without.
+    Smooth,
     /// Variable width: width points along the stroke.
     Width,
 }
 
 impl VTool {
-    pub const ALL: [VTool; 8] = [VTool::Move, VTool::Pen, VTool::Bend, VTool::Paint, VTool::Lasso, VTool::Cut, VTool::Eraser, VTool::Width];
+    pub const ALL: [VTool; 9] =
+        [VTool::Move, VTool::Pen, VTool::Bend, VTool::Paint, VTool::Lasso, VTool::Cut, VTool::Eraser, VTool::Smooth, VTool::Width];
     pub fn id(self) -> &'static str {
         match self {
             VTool::Move => "move",
@@ -67,6 +72,7 @@ impl VTool {
             VTool::Lasso => "lasso",
             VTool::Cut => "cut",
             VTool::Eraser => "eraser",
+            VTool::Smooth => "smooth",
             VTool::Width => "width",
         }
     }
@@ -82,6 +88,7 @@ impl VTool {
             VTool::Lasso => "Lasso",
             VTool::Cut => "Cut",
             VTool::Eraser => "Eraser",
+            VTool::Smooth => "Smooth",
             VTool::Width => "Variable width",
         }
     }
@@ -95,6 +102,7 @@ impl VTool {
             VTool::Lasso => "Q",
             VTool::Cut => "X",
             VTool::Eraser => "Shift+E",
+            VTool::Smooth => "Shift+S",
             VTool::Width => "Shift+W",
         }
     }
@@ -841,6 +849,7 @@ pub fn key(s: &mut Session, name: &str, shift: bool, alt: bool, cmd: bool) -> Re
         ("Q", false, false, false) => set_tool(s, VTool::Lasso)?,
         ("X", false, false, false) => set_tool(s, VTool::Cut)?,
         ("E", true, false, false) => set_tool(s, VTool::Eraser)?,
+        ("S", true, false, false) => set_tool(s, VTool::Smooth)?,
         ("W", true, false, false) => set_tool(s, VTool::Width)?,
         _ => return Ok(false),
     }
@@ -899,7 +908,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "widthPoints": width_handles(doc, &ve, 1.0), "widthPoint": ve.width_point, "layers": layers, "others": others,
                 "handles": ve.handles, "regions": ve.regions, "regionVertices": ve.region_vertices, "regionHover": ve.region_hover}))
         }),
-        spec!("vector.edit.tool", "Vector edit tool", "{tool: move|pen|bend|paint|lasso|cut|eraser|width}", false, |s, p| {
+        spec!("vector.edit.tool", "Vector edit tool", "{tool: move|pen|bend|paint|lasso|cut|eraser|smooth|width}", false, |s, p| {
             editing(s)?;
             let t = string(p, "tool").and_then(|t| VTool::from_id(&t)).ok_or_else(|| bad("vector.edit.tool", "unknown tool"))?;
             set_tool(s, t)?;
@@ -1224,6 +1233,45 @@ pub fn specs() -> Vec<CommandSpec> {
                     ve.segments.clear();
                 })?;
                 Ok(json!({"changed": changed}))
+            }
+        ),
+        spec!(
+            "vector.edit.smoothAlong",
+            "Smooth along",
+            "{points: [[x, y], ...] (page, the brush's path), radius? (page units, default 14), tolerance? (page units, default 1)} — the Smooth tool: irons out the paths the brush passes over and drops the points they can do without (keeping within `tolerance`); ends and junctions stay. Returns {changed, vertices}",
+            true,
+            |s, p| {
+                let ve = editing(s)?;
+                let w = s.doc()?.world_transform(ve.id);
+                let inv = w.inverse();
+                let scale = w.determinant().abs().sqrt().max(1e-9);
+                let r = num_or(p, "radius", 14.0).clamp(0.01, 1e5) / scale;
+                let tol = num_or(p, "tolerance", 1.0).clamp(0.0, 1e5) / scale;
+                let pts: Vec<Point> = match get(p, "points") {
+                    Some(Value::Array(a)) => {
+                        a.iter().filter_map(|q| Some(inv * Point::new(q.get(0).and_then(f64_of)?, q.get(1).and_then(f64_of)?))).take(10_000).collect()
+                    }
+                    _ => vec![],
+                };
+                // Dabs a third of the brush apart between the given points, as a drag makes them.
+                let mut dabs = Vec::new();
+                for (i, q) in pts.iter().enumerate() {
+                    let from = if i == 0 { *q } else { pts[i - 1] };
+                    let n = ((*q - from).hypot() / (r / 3.0)).floor().clamp(0.0, 500.0) as usize;
+                    dabs.extend((1..=n).map(|k| from.lerp(*q, k as f64 / n as f64)));
+                    if n == 0 {
+                        dabs.push(*q);
+                    }
+                }
+                let (changed, vertices) = edit(s.doc_mut()?, ve.id, |net| {
+                    let changed = dabs.iter().fold(false, |acc, c| ops::smooth(net, *c, r, tol) | acc);
+                    (changed, net.vertices.len())
+                })?;
+                set_state(s, |ve| {
+                    ve.vertices.clear();
+                    ve.segments.clear();
+                })?;
+                Ok(json!({"changed": changed, "vertices": vertices}))
             }
         ),
         spec!("vector.edit.connect", "Connect points", "{a, b} (adds a straight segment)", true, |s, p| {

@@ -93,6 +93,14 @@ pub(crate) enum VGesture {
     Paint {
         stamps: Vec<Point>,
     },
+    /// Smooth tool: the network as the dabs so far left it (the snapshot's coordinates), where the
+    /// last dab was, and the brush radius and the tolerance for dropping points (local units).
+    Smooth {
+        net: Arc<VectorNetwork>,
+        last: Point,
+        radius: f64,
+        tol: f64,
+    },
     /// Eraser strokes so far (local points) and the brush radius (local units).
     Erase {
         stamps: Vec<Point>,
@@ -117,6 +125,11 @@ pub(crate) struct PointSnap {
 /// Eraser brush radius in screen pixels.
 const ERASER_PX: f64 = 8.0;
 
+/// Smooth brush radius in screen pixels.
+const SMOOTH_PX: f64 = 14.0;
+/// How far (screen pixels) the Smooth tool lets a path move when it drops a point.
+const SMOOTH_TOL_PX: f64 = 1.0;
+
 /// A segment's midpoint is a point a press adds when the pointer is this close (screen pixels).
 const MIDPOINT_PX: f64 = 6.0;
 
@@ -129,6 +142,15 @@ fn segment_point(doc: &Document, id: NodeId, seg: usize, t: f64) -> Option<Point
 
 fn erase_all(net: &mut VectorNetwork, stamps: &[Point], radius: f64) -> bool {
     stamps.iter().fold(false, |acc, c| ops::erase(net, *c, radius) | acc)
+}
+
+/// The brush a tool shows around the pointer (screen pixels).
+fn brush_px(tool: VTool) -> Option<f64> {
+    match tool {
+        VTool::Eraser => Some(ERASER_PX),
+        VTool::Smooth => Some(SMOOTH_PX),
+        _ => None,
+    }
 }
 
 /// What a pen click does (replayed against the snapshot while the handle is dragged).
@@ -386,7 +408,7 @@ impl Session {
         ov.face.clear();
         ov.rubber = None;
         ov.guides.clear();
-        ov.brush = (ve.tool == VTool::Eraser).then(|| [ev.x, ev.y, ERASER_PX / ev.zoom.max(1e-6)]);
+        ov.brush = brush_px(ve.tool).map(|px| [ev.x, ev.y, px / ev.zoom.max(1e-6)]);
         // What a press here would do (see `vector_down`).
         ov.cursor = match (ve.tool, h) {
             (VTool::Bend, _) => Cursor::Pen(PenCursor::Bend),
@@ -791,6 +813,21 @@ impl Session {
                 })?;
                 self.vgesture(VGesture::Erase { stamps, radius });
             }
+            VTool::Smooth => {
+                let scale = w.determinant().abs().sqrt().max(1e-9);
+                let (radius, tol) = (SMOOTH_PX / ev.zoom.max(1e-6) / scale, SMOOTH_TOL_PX / ev.zoom.max(1e-6) / scale);
+                let at = w.inverse() * ev.p();
+                self.begin_interaction("Smooth")?;
+                let mut net = network(self.doc()?, id).cloned().unwrap_or_default();
+                ops::smooth(&mut net, at, radius, tol);
+                let net = Arc::new(net);
+                self.smooth_preview(id, &net)?;
+                set_state(self, |e| {
+                    e.vertices.clear();
+                    e.segments.clear();
+                })?;
+                self.vgesture(VGesture::Smooth { net, last: at, radius, tol });
+            }
             VTool::Width => self.width_down(ve, ev)?,
             VTool::Lasso => {
                 self.tool.overlay.lasso = vec![[ev.x, ev.y]];
@@ -981,6 +1018,25 @@ impl Session {
                 self.select_parts(&base, |doc, id| super::vertices_in_polygon(doc, id, &points), true)?;
                 self.vgesture(VGesture::Lasso { points, base });
             }
+            VGesture::Smooth { net, last, radius, tol } => {
+                self.tool.overlay.brush = Some([ev.x, ev.y, SMOOTH_PX / ev.zoom.max(1e-6)]);
+                // Dabs a third of the brush apart along the drag; going over a place again
+                // smooths it more.
+                let step = (radius / 3.0).max(1e-6);
+                let n = ((lp - last).hypot() / step).floor().min(500.0) as usize;
+                if n == 0 {
+                    self.vgesture(VGesture::Smooth { net, last, radius, tol });
+                    return Ok(());
+                }
+                let mut next = (*net).clone();
+                for k in 1..=n {
+                    ops::smooth(&mut next, last.lerp(lp, k as f64 / n as f64), radius, tol);
+                }
+                let at = last.lerp(lp, 1.0);
+                let net = Arc::new(next);
+                self.smooth_preview(id, &net)?;
+                self.vgesture(VGesture::Smooth { net, last: at, radius, tol });
+            }
             VGesture::Erase { mut stamps, radius } => {
                 self.tool.overlay.brush = Some([ev.x, ev.y, ERASER_PX / ev.zoom.max(1e-6)]);
                 // Stamps a third of the brush apart, filling gaps on fast strokes.
@@ -1049,6 +1105,12 @@ impl Session {
         })
     }
 
+    /// Show layer `id` with the network the Smooth tool's dabs made so far (in the snapshot's
+    /// coordinates, so it goes onto the snapshot and is re-fitted there).
+    fn smooth_preview(&mut self, id: NodeId, net: &Arc<VectorNetwork>) -> Result<()> {
+        self.preview(|doc, _| edit(doc, id, |n| *n = (**net).clone()))
+    }
+
     fn vector_up(&mut self, ve: &VectorEdit, ev: &PointerEvent) -> Result<()> {
         let g = std::mem::take(&mut self.tool.gesture);
         self.tool.overlay.marquee = None;
@@ -1104,7 +1166,7 @@ impl Session {
                     e.activate(id);
                 }
             })?,
-            VGesture::Erase { .. } | VGesture::Paint { .. } => self.commit_interaction()?,
+            VGesture::Erase { .. } | VGesture::Paint { .. } | VGesture::Smooth { .. } => self.commit_interaction()?,
             VGesture::BoxScale { pick, .. } => self.box_scale_up(pick)?,
             VGesture::Cut { start, hit } => self.cut_up(ve, start, hit, ev)?,
             VGesture::Width(g) => self.width_up(g)?,

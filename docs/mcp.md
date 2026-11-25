@@ -843,13 +843,15 @@ are edited at once, the first active; `key` Enter with shapes selected does the 
 `vector.edit.state` (page-space overlay of the active layer, its local network, each point's handle
 mirroring, the width points, `layers` (every edited layer, the active first), `others` (the other
 layers' selected points and segments) and `handles` (the selected Bezier handles as
-`[segment, start]`)), `vector.edit.tool {tool: move|pen|bend|paint|lasso|cut|eraser|width}`,
+`[segment, start]`)), `vector.edit.tool {tool: move|pen|bend|paint|lasso|cut|eraser|smooth|width}`,
 `vector.edit.select {vertices?, segments?, handles?: [[segment, start], ...], id? (an edited layer,
 made active), add?}`, `vector.edit.selectAll` (every edited layer's points), `vector.edit.moveVertices`,
 `vector.edit.nudge`, `vector.edit.position {x?, y?}`, `vector.edit.setHandle`, `vector.edit.mirroring
 {mode: none|angle|angleAndLength}`, `vector.edit.smooth {smooth?}`, `vector.edit.bend`,
 `vector.edit.addVertex`, `vector.edit.connect {a, b}`, `vector.edit.pen {x, y, dx?, dy?}` (continues
 from the pen's open end; clicking a point connects or branches), `vector.edit.penEnd`,
+`vector.edit.smoothAlong {points, radius?, tolerance?}` (the Smooth tool along a brush path in page
+units: irons out wobbles and drops points the path can do without; ends and junctions stay),
 `vector.edit.paint {x, y} | {points}` (paint bucket: fills or unfills the closed area under a page
 point; with `points`, the areas under the rest go the way the first went, like a drag), `fill.set`,
 `fill.add`, `fill.remove`, `fill.move` and `fill.paste` on the edited layer while regions are
