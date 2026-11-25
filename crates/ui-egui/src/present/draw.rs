@@ -1,3 +1,8 @@
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use figcraft_doc::{Document, Node};
+
 use super::actions::texture_scale;
 use super::layout::{Layout, Place, hotspots};
 use super::transition::{smart_interpolate, transition_frames};
@@ -8,6 +13,13 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
     let px = l.scale * ppp;
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     let to_tex = p.texture(ctx, &l.disp, p.current, px, now);
+    // A Smart Animate inside the presented frame (Change to): which part of it changes, once.
+    if let Some(a) = p.anim.as_mut()
+        && a.region.is_none()
+        && matches!(a.transition, Transition::SmartAnimate)
+    {
+        a.region = Some(if a.from_frame == p.current { changed_area(&a.from_doc, &l.disp, p.current) } else { None });
+    }
     // Transition progress.
     let mut drawn = false;
     if let Some(a) = &p.anim {
@@ -22,22 +34,23 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
                 #[cfg(not(target_arch = "wasm32"))]
                 let t0 = std::time::Instant::now();
                 let tmp = smart_interpolate(&a.from_doc, a.from_frame, &l.disp, p.current, e);
-                let bounds = figcraft_render::export_bounds(&tmp, p.current);
-                if let Some(b) = bounds
+                if let (Some(Some(area)), Some(to)) = (a.region, &to_tex) {
+                    // Only `area` changes: the rest is the frame as it ends, already rendered, and
+                    // the area alone is rendered as it is now (every layer of the frame in it, so
+                    // what lies over or under the change draws as it does in the whole frame).
+                    if let Some(pix) = figcraft_render::render_area_at(&tmp, &[p.current], area, texture_scale(ctx, area, px), 0.0) {
+                        let tex = anim_texture(&mut p.anim_tex, ctx, crate::render_worker::screen_image(&pix, tmp.color_profile));
+                        let hole = l.clip.intersect(l.place.rect(area));
+                        for part in base_parts(l.clip, Some(hole)) {
+                            painter.with_clip_rect(part).image(to.tex.id(), l.place.rect(to.bounds), uv, Color32::WHITE);
+                        }
+                        painter.with_clip_rect(l.clip).image(tex.id(), l.place.rect(area), uv, Color32::WHITE);
+                        drawn = true;
+                    }
+                } else if let Some(b) = figcraft_render::export_bounds(&tmp, p.current)
                     && let Some(pix) = figcraft_render::render_node(&tmp, p.current, texture_scale(ctx, b, px))
                 {
-                    let img = crate::render_worker::screen_image(&pix, tmp.color_profile);
-                    let tex = match &mut p.anim_tex {
-                        Some(t) => {
-                            t.set(img, egui::TextureOptions::LINEAR);
-                            t.clone()
-                        }
-                        None => {
-                            let t = ctx.load_texture("present-anim", img, egui::TextureOptions::LINEAR);
-                            p.anim_tex = Some(t.clone());
-                            t
-                        }
-                    };
+                    let tex = anim_texture(&mut p.anim_tex, ctx, crate::render_worker::screen_image(&pix, tmp.color_profile));
                     painter.with_clip_rect(l.screen).image(tex.id(), l.place.rect(b), uv, Color32::WHITE);
                     drawn = true;
                 }
@@ -84,7 +97,8 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
         if shown.is_positive() {
             let (a, b) = (l.place.page(shown.min), l.place.page(shown.max));
             let visible = figcraft_geom::Rect::new(a.x, a.y, b.x, b.y);
-            let moving = p.fling.is_some() || p.drag_scroll.is_some() || p.wheel.is_some();
+            let settling = settling(p, ctx, px, visible, now);
+            let moving = settling || p.fling.is_some() || p.drag_scroll.is_some() || p.wheel.is_some();
             detail = p.detail_texture(ctx, &l.disp, p.current, px, to.bounds, visible, moving, now);
         }
         let hole = detail.as_ref().map(|d| l.clip.intersect(l.place.rect(d.bounds)));
@@ -138,6 +152,118 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
             painter.rect_stroke(r, CornerRadius::same(4), Stroke::new(1.5, ACCENT.gamma_multiply(a)), StrokeKind::Outside);
         }
         ctx.request_repaint();
+    }
+}
+
+/// A wheel turned notch by notch stops between notches: the view counts as moving until it has
+/// kept still [`SETTLE`] at the same frame and scale, so no detail is rendered (on this thread)
+/// mid-scroll.
+fn settling(p: &mut Presenter, ctx: &egui::Context, px: f64, visible: figcraft_geom::Rect, now: f64) -> bool {
+    let moved_at = match p.view_at {
+        Some((id, s, r, at)) if id == p.current && s == px => {
+            if r == visible {
+                at
+            } else {
+                now
+            }
+        }
+        _ => f64::NEG_INFINITY,
+    };
+    p.view_at = Some((p.current, px, visible, moved_at));
+    let settling = now - moved_at < SETTLE;
+    if settling {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(SETTLE));
+    }
+    settling
+}
+
+/// How long the view keeps still before the part in view is rendered at full detail (seconds).
+pub(super) const SETTLE: f64 = 0.2;
+
+/// The Smart Animate texture, its image replaced (one texture, reused for every frame).
+fn anim_texture(slot: &mut Option<egui::TextureHandle>, ctx: &egui::Context, img: egui::ColorImage) -> egui::TextureHandle {
+    match slot {
+        Some(t) => {
+            t.set(img, egui::TextureOptions::LINEAR);
+            t.clone()
+        }
+        None => {
+            let t = ctx.load_texture("present-anim", img, egui::TextureOptions::LINEAR);
+            *slot = Some(t.clone());
+            t
+        }
+    }
+}
+
+/// Past this share of the frame, a change inside it is drawn by rendering the whole frame.
+const MOST_OF_THE_FRAME: f64 = 0.5;
+
+/// What changed in a frame between two states of the player's document.
+#[derive(Debug, PartialEq)]
+pub(super) enum Change {
+    Nothing,
+    /// Only this page area (inside the frame) shows anything different.
+    Area(figcraft_geom::Rect),
+    /// The frame itself, what all of it draws with, or most of it.
+    Whole,
+}
+
+/// The page area a change inside `frame` touches from `from` to `to`: every layer of it that
+/// differs, where it was and where it is (its effects included), with a margin for what Smart
+/// Animate moves between them. [`Change::Whole`] when the frame itself differs (beyond which
+/// layers it holds), when what every layer draws with does (styles, variables, images, colour
+/// profile), or when the area is most of the frame.
+pub(super) fn change(from: &Document, to: &Document, frame: NodeId) -> Change {
+    const MARGIN: f64 = 8.0;
+    let Some(whole) = to.world_render_bounds(frame) else { return Change::Whole };
+    if from.styles != to.styles
+        || from.variables != to.variables
+        || from.color_profile != to.color_profile
+        || !from.images.keys().eq(to.images.keys())
+        || from.world_render_bounds(frame) != Some(whole)
+    {
+        return Change::Whole;
+    }
+    let ids: BTreeSet<NodeId> = from.subtree(frame).into_iter().chain(to.subtree(frame)).collect();
+    let mut area: Option<figcraft_geom::Rect> = None;
+    for id in ids {
+        let (a, b) = (from.node_arc(id), to.node_arc(id));
+        if let (Some(a), Some(b)) = (a, b)
+            && (Arc::ptr_eq(a, b) || a == b)
+        {
+            continue;
+        }
+        if id == frame {
+            // Layers added to or taken from the frame count where they are; anything else about
+            // the frame, or its other layers changing order, changes all of it.
+            let (Some(a), Some(b)) = (a, b) else { return Change::Whole };
+            let kept = |of: &Node, other: &Node| of.children.iter().filter(|c| other.children.contains(c)).copied().collect::<Vec<_>>();
+            let bare = |n: &Node| Node { children: Vec::new(), ..n.clone() };
+            if kept(a, b) != kept(b, a) || bare(a) != bare(b) {
+                return Change::Whole;
+            }
+            continue;
+        }
+        for r in [from.world_render_bounds(id), to.world_render_bounds(id)].into_iter().flatten() {
+            area = Some(area.map_or(r, |a| a.union(r)));
+        }
+    }
+    let Some(area) = area else { return Change::Nothing };
+    let area = area.inflate(MARGIN, MARGIN).intersect(whole);
+    if !(area.width() > 0.0 && area.height() > 0.0) {
+        Change::Nothing
+    } else if area.area() <= whole.area() * MOST_OF_THE_FRAME {
+        Change::Area(area)
+    } else {
+        Change::Whole
+    }
+}
+
+/// The area of a [`change`], when it is one small enough to draw on its own.
+pub(super) fn changed_area(from: &Document, to: &Document, frame: NodeId) -> Option<figcraft_geom::Rect> {
+    match change(from, to, frame) {
+        Change::Area(a) => Some(a),
+        _ => None,
     }
 }
 

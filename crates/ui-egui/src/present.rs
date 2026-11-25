@@ -108,6 +108,10 @@ struct FrameTex {
     tex: egui::TextureHandle,
     /// Page-space rect the texture covers.
     bounds: figcraft_geom::Rect,
+    /// Texture pixels per page unit.
+    scale: f64,
+    /// The document it shows (a change to a small part of it redraws only that part).
+    src: Arc<Document>,
 }
 
 /// A transition in progress from a captured state to the current one.
@@ -122,6 +126,10 @@ struct Anim {
     /// Started by a drag: while the pointer stays down the transition follows it (where the drag
     /// began, the unit vector it moves along and the distance that completes it, screen points).
     follow: Option<(Pos2, Vec2, f32)>,
+    /// A Smart Animate that changes layers inside the presented frame (Change to): the page area
+    /// it touches, worked out on its first frame ([`draw::changed_area`]). Only that area is
+    /// rendered while it plays; `Some(None)` draws the whole frame each time.
+    region: Option<Option<figcraft_geom::Rect>>,
 }
 
 /// What a wheel or drag scrolls: a frame with overflow (offsets in page units), or the whole view
@@ -203,8 +211,8 @@ impl PresentScale {
     }
 }
 
-/// The full-window presenter's options (kept for later presentations; the preview pane always
-/// fits, with the device drawn).
+/// The full-window presenter's options (kept for later presentations; it starts at 100%). The
+/// preview pane always fits, with the device drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PresentView {
     pub scale: PresentScale,
@@ -223,7 +231,7 @@ pub struct PresentView {
 
 impl Default for PresentView {
     fn default() -> Self {
-        Self { scale: PresentScale::Fit, device_frame: true, comments: false, hotspot_hints: true, inspect: false, hide_ui: false }
+        Self { scale: PresentScale::Actual, device_frame: true, comments: false, hotspot_hints: true, inspect: false, hide_ui: false }
     }
 }
 
@@ -295,6 +303,9 @@ pub struct Presenter {
     /// The part of the presented frame in view, drawn at device scale over the (capped) whole-frame
     /// texture; `bounds` is the page area it covers.
     detail: Option<(NodeId, FrameTex)>,
+    /// The frame, pixel scale and page area last in view, and when that area last moved at that
+    /// scale ([`draw::SETTLE`]).
+    view_at: Option<(NodeId, f64, figcraft_geom::Rect, f64)>,
     /// Small current-screen preview in the full-window bar, cached until its content changes.
     bar_thumb: Option<(NodeId, usize, egui::TextureHandle)>,
     arrived: f64,
@@ -382,6 +393,7 @@ impl Presenter {
             temp: None,
             textures: HashMap::new(),
             detail: None,
+            view_at: None,
             bar_thumb: None,
             arrived: -1.0,
             delays_fired: HashSet::new(),

@@ -123,6 +123,8 @@ fn big() -> (Ui, NodeId) {
     let big = id(&s.execute("node.create", &json!({"type": "frame", "name": "Big", "x": 0, "y": 0, "width": 2000, "height": 3000})).unwrap());
     s.execute("node.create", &json!({"type": "frame", "name": "Small", "x": 2100, "y": 0, "width": 300, "height": 200})).unwrap();
     let mut u = Ui::new(s);
+    // These cases start from Fit (the presenter itself starts at 100%).
+    u.run("proto.presentOptions", json!({"scale": "fit"}));
     u.run("proto.present", json!({"start": big}));
     (u, big)
 }
@@ -153,14 +155,15 @@ fn presenter_scales_by_its_options_and_pans_what_overflows() {
     assert!((num(&p["zoom"]) - 0.72).abs() < 1e-3, "{p}");
     assert_eq!(p["panRange"][0], 0.0);
     assert!((num(&p["panRange"][1]) - (2160.0 - 820.0)).abs() < 1.0, "{p}");
-    // Z: fill (here the width decides too), then 100%: both ways overflow, centred across at the top.
+    // Z: fill (here the width decides too), then 100%: both ways overflow, centred across at the top
+    // and panning edge to edge of the window (no padding where it overflows).
     u.key(at, Key::Z);
     assert_eq!(presenter(&u)["scale"], "fill");
     u.key(at, Key::Z);
     let p = presenter(&u);
     assert_eq!((p["scale"].as_str(), num(&p["zoom"])), (Some("actual"), 1.0));
-    assert_eq!(p["panRange"], json!([624.0, 2244.0]));
-    assert_eq!(p["pan"], json!([312.0, 0.0]));
+    assert_eq!(p["panRange"], json!([560.0, 2180.0]));
+    assert_eq!(p["pan"], json!([280.0, 0.0]));
     // The wheel pans down; a drag pans with the pointer.
     let wheel = move || {
         vec![
@@ -213,6 +216,7 @@ fn devices_turn_and_their_frame_can_hide() {
     u.run("proto.closePreview", json!({}));
     // Full window, upright: hiding the device's body leaves more room for the screen.
     u.run("proto.settings", json!({"rotation": "portrait"}));
+    u.run("proto.presentOptions", json!({"scale": "fit"}));
     u.run("proto.present", json!({"start": a}));
     let with_body = num(&presenter(&u)["zoom"]);
     u.run("proto.presentOptions", json!({"deviceFrame": false}));
