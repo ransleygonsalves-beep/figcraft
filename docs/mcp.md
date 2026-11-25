@@ -295,6 +295,10 @@ Or in a project's `.mcp.json`:
   `image.crop {ids?, index?}` (one layer) switches its top visible image fill (or fill `index`) to
   Crop, keeping the picture where it was, and returns `{id, index}`; the app also enters crop mode
   on the canvas. The crop itself is the paint's `crop` transform (`fill.set`).
+  `image.vectorize {ids?, colors? (2–64, default 16), detail? (0–1, default 0.5)}` traces each
+  layer with an image fill as it shows into filled vectors, one per colour, stacked largest first
+  in a group just above it, and hides the layer; pixels more than half transparent are left out.
+  Higher `detail` keeps smaller shapes and follows edges more closely. Returns `{ids, shapes}`.
 - Text props (`fontFamily`, `fontStyle`, `fontSize`, `lineHeight`, `letterSpacing`, `textDecoration`,
   `textCase`, `textFills`, `fontVariations`…) apply to the whole layer, or to chars `start`..`end`
   when given (`text.style {id, start, end, …}` does the same). Styled ranges come back as

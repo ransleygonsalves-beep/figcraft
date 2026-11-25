@@ -4,6 +4,7 @@
 //!   sweep-line topology from `linesweeper`); results use the even-odd rule.
 //! - [`stroke_outline`]: a stroke as a fill, with Figma's Inside / Center / Outside alignment,
 //!   dashes, caps, joins, arrowheads, variable width profiles ([`width`]) and brushes ([`brush`]).
+//! - [`trace`]: a raster image as filled shapes, one per colour (Vectorize image).
 //! - [`round_corners`]: a corner radius (and smoothing) on every corner still sharp in a closed path,
 //!   as a boolean group draws its result.
 //!
@@ -33,6 +34,9 @@ mod round_tests;
 mod rounded_side_strokes_tests;
 #[cfg(test)]
 mod sides_tests;
+pub mod trace;
+#[cfg(test)]
+mod trace_tests;
 pub mod width;
 #[cfg(test)]
 mod width_tests;
