@@ -350,6 +350,7 @@ use canvas::selection_spacing;
 pub use canvas::widget_bar;
 pub use dialogs::branch_ui;
 pub use dialogs::credits;
+pub use dialogs::font_download;
 pub use dialogs::import_report;
 pub use dialogs::missing_fonts;
 pub use dialogs::plugins_ui;
@@ -573,6 +574,8 @@ pub struct UiState {
     /// Files the user opened whose fonts are yet to be checked (by document uid).
     pub font_checks: Vec<u64>,
     pub missing_fonts: Option<missing_fonts::Shown>,
+    /// A family picked from the font menu that isn't installed: its download, then its pick.
+    pub font_download: Option<font_download::Pending>,
     /// The eyedropper's Cmd/Ctrl+Shift pick, to make a colour style or variable of.
     pub sampled_color: Option<sampled_color::SampledColor>,
     pub screenshot_requests: Vec<(u64, String)>,
@@ -746,6 +749,7 @@ impl Default for UiState {
             import_report: None,
             font_checks: Vec::new(),
             missing_fonts: None,
+            font_download: None,
             sampled_color: None,
             screenshot_requests: Vec::new(),
             frame_ms: 0.0,

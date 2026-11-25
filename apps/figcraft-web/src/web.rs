@@ -308,7 +308,9 @@ impl Services for WebServices {
         self.reduce_motion.as_ref().is_some_and(web_sys::MediaQueryList::matches)
     }
     /// Only your name is kept ([`crate::kept`]): the rest starts afresh with each page.
-    fn save_prefs(&mut self, prefs: &figcraft_engine::Prefs) {
+    fn save_prefs(&mut self, prefs: &mut figcraft_engine::Prefs) {
+        // The recent files aren't kept here: their changes have nowhere to go.
+        prefs.recent_changes.clear();
         if let Some(Err(e)) = local_storage().map(|s| s.set_item(NAME_KEY, &prefs.user_name)) {
             log::warn!("couldn't keep your name: {e:?}");
         }

@@ -210,7 +210,7 @@ impl FigApp {
             | std::mem::take(&mut self.session.live.unsaved)
             | std::mem::take(&mut self.session.prefs_unsaved)
         {
-            self.services.save_prefs(&self.session.prefs);
+            self.services.save_prefs(&mut self.session.prefs);
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -414,7 +414,7 @@ impl FigApp {
         // Kept once the drag is over (not on every pointer move).
         if self.panels_unsaved && !ctx.input(|i| i.pointer.any_down()) {
             self.panels_unsaved = false;
-            self.services.save_prefs(&self.session.prefs);
+            self.services.save_prefs(&mut self.session.prefs);
         }
         // Before the shortcuts: keys the hovered pane's prototype uses don't reach the editor, and
         // the arrows step through comment threads with the Comment tool.

@@ -202,7 +202,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, m: &Missing, job: Option<&Download>) -> bo
 
 /// Asks the user to turn downloading fonts on (the setting every Craft app shares): `Some(true)`
 /// when they allow it, `Some(false)` for Not now.
-fn consent_prompt(ui: &mut egui::Ui, t: &Tokens) -> Option<bool> {
+pub(crate) fn consent_prompt(ui: &mut egui::Ui, t: &Tokens) -> Option<bool> {
     ui.add_space(10.0);
     crate::widgets::separator(ui);
     ui.add_space(6.0);

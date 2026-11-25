@@ -13,7 +13,7 @@ use crate::live_tests::{Harness, has_text, text_center};
 struct Kept(Arc<Mutex<Vec<String>>>);
 
 impl Services for Kept {
-    fn save_prefs(&mut self, prefs: &Prefs) {
+    fn save_prefs(&mut self, prefs: &mut Prefs) {
         self.0.lock().unwrap().push(prefs.user_name.clone());
     }
 }

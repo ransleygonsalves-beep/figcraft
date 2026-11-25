@@ -1,0 +1,15 @@
+[package]
+name = "figcraft-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FigCraft's settings folder and preferences file, shared by the desktop app and figcraft-cli"
+
+[lints]
+workspace = true
+
+[dependencies]
+figcraft-engine = { workspace = true }
+craft-settings = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

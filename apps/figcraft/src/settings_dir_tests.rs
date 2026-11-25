@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use craft_settings::Probe;
 use figcraft_engine::Prefs;
 
-use crate::services::{Desktop, settings_dir, write_prefs};
+use figcraft_settings::settings_dir;
+
+use crate::services::{Desktop, write_prefs};
 
 /// A fresh temporary folder with an `app` folder (the executable's) and an `appdata` folder (the
 /// platform's config folder).
@@ -45,7 +47,7 @@ fn loaded_name(dir: PathBuf) -> Option<String> {
 fn without_a_marker_the_settings_stay_where_they_always_were() {
     let root = root("installed");
     let old = root.join("appdata").join("FigCraft");
-    write_prefs(&old, &prefs("Ada"));
+    write_prefs(&old, &mut prefs("Ada"));
     let dir = settings_dir(&probe(&root, Some(root.join("appdata")), None));
     assert_eq!(dir, Some(old.clone()), "the folder every earlier version used");
     assert_eq!(loaded_name(old), Some("Ada".into()), "an existing user's preferences are read");
@@ -57,7 +59,7 @@ fn without_a_marker_the_settings_stay_where_they_always_were() {
 fn a_portable_marker_keeps_the_settings_next_to_the_executable_and_takes_the_old_ones() {
     let root = root("portable");
     let old = root.join("appdata").join("FigCraft");
-    write_prefs(&old, &prefs("Ada"));
+    write_prefs(&old, &mut prefs("Ada"));
     std::fs::write(root.join("app").join("portable"), "").unwrap();
     let portable = root.join("app").join("config");
     let dir = settings_dir(&probe(&root, Some(root.join("appdata")), None));
@@ -65,7 +67,7 @@ fn a_portable_marker_keeps_the_settings_next_to_the_executable_and_takes_the_old
     assert_eq!(loaded_name(portable.clone()), Some("Ada".into()), "the copy starts with the settings it had");
     assert_eq!(loaded_name(old.clone()), Some("Ada".into()), "the installed app's stay where they were");
     // Later starts keep the portable copy's own settings.
-    write_prefs(&portable, &prefs("Grace"));
+    write_prefs(&portable, &mut prefs("Grace"));
     assert_eq!(settings_dir(&probe(&root, Some(root.join("appdata")), None)), Some(portable.clone()));
     assert_eq!(loaded_name(portable), Some("Grace".into()), "never overwritten by the old ones again");
     let _ = std::fs::remove_dir_all(&root);

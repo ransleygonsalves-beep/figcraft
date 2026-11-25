@@ -126,7 +126,7 @@ struct Log {
 
 struct Watch(Arc<Mutex<Log>>);
 impl Services for Watch {
-    fn save_prefs(&mut self, prefs: &Prefs) {
+    fn save_prefs(&mut self, prefs: &mut Prefs) {
         self.0.lock().unwrap().saved.push(prefs.clone());
     }
     fn reveal_path(&mut self, path: &Path) {

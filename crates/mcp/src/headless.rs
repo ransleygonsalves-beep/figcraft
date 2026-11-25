@@ -8,9 +8,16 @@ use serde_json::{Value, json};
 
 use crate::backend::Backend;
 
+/// What an agent's session did to the recent files, handed on after each call that changed them
+/// (the CLI adds them to the app's recent files).
+pub type RecentsSink = Box<dyn FnMut(&[figcraft_engine::RecentChange])>;
+
 /// Headless backend: a [`Session`] with one untitled document.
 pub struct Headless {
     pub session: Session,
+    /// Gets the files the session opened or saved ([`Self::with_recents`]); without one they stay
+    /// in the session.
+    recents: Option<RecentsSink>,
 }
 
 impl Default for Headless {
@@ -51,7 +58,13 @@ impl Headless {
         if !session.live.available() {
             session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(|| {}))));
         }
-        Self { session }
+        Self { session, recents: None }
+    }
+
+    /// Hand the files the session opens or saves to `sink` after each call.
+    pub fn with_recents(mut self, sink: RecentsSink) -> Self {
+        self.recents = Some(sink);
+        self
     }
 
     fn execute(&mut self, cmd: &str, params: &Value) -> Result<Value, String> {
@@ -66,6 +79,12 @@ impl Headless {
         self.session.live_sync();
         // No UI: dialogs and panels requested by commands are dropped.
         self.session.ui_requests.clear();
+        let changes = std::mem::take(&mut self.session.prefs.recent_changes);
+        if let Some(sink) = self.recents.as_mut()
+            && !changes.is_empty()
+        {
+            sink(&changes);
+        }
         r
     }
 

@@ -440,21 +440,13 @@ fn entry_summary(e: &PluginEntry) -> String {
     if !e.author.is_empty() {
         parts.push(trf("by {author}", &[("author", &e.author)]));
     }
-    parts.push(size(e.bytes));
+    parts.push(crate::widgets::byte_size(e.bytes));
     parts.push(access_text(&e.access).to_string());
     parts.join(" · ")
 }
 
 fn access_text(access: &str) -> &'static str {
     if access == "write" { tr("can edit the document") } else { tr("reads the document") }
-}
-
-fn size(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / f64::from(1 << 20)),
-        b if b >= 1 << 10 => format!("{} KB", b.div_ceil(1 << 10)),
-        b => format!("{b} B"),
-    }
 }
 
 /// Installing runs a plugin's code: this window shows what it asks permission for, where it comes

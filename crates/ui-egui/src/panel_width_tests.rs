@@ -19,7 +19,7 @@ type Kept = Arc<Mutex<Vec<(f32, f32)>>>;
 /// Services that note the preferences each time they are kept.
 struct Keeps(Kept);
 impl Services for Keeps {
-    fn save_prefs(&mut self, prefs: &Prefs) {
+    fn save_prefs(&mut self, prefs: &mut Prefs) {
         self.0.lock().unwrap().push(prefs.panel_widths);
     }
 }

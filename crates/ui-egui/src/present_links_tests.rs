@@ -35,7 +35,7 @@ impl Services for Opened {
         }
     }
 
-    fn save_prefs(&mut self, prefs: &figcraft_engine::Prefs) {
+    fn save_prefs(&mut self, prefs: &mut figcraft_engine::Prefs) {
         if let Ok(mut v) = self.1.lock() {
             v.push(prefs.clone());
         }

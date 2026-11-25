@@ -78,7 +78,7 @@ fn preferences_are_readable_by_their_owner_only() {
         std::fs::write(dir.join(name), "{}").unwrap();
         std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
     }
-    crate::services::write_prefs(&dir, &figcraft_engine::Prefs::default());
+    crate::services::write_prefs(&dir, &mut figcraft_engine::Prefs::default());
     assert_eq!(mode(&dir.join("state.json")), 0o600);
     let _ = std::fs::remove_dir_all(&dir);
 }

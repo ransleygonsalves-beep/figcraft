@@ -202,7 +202,7 @@ mod tests {
             let mut out = FontPick::default();
             let mut shown = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 let resp = ui.interact(field, egui::Id::unique("font_field"), egui::Sense::click());
-                out = font_picker(ui, &resp, Some(current), 240.0, |_| false).unwrap_or_default();
+                out = font_picker(ui, &resp, Some(current), 240.0, false, |_| false).unwrap_or_default();
             });
             shown.textures_delta.clear();
             out

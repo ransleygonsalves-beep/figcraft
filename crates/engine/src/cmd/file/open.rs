@@ -5,12 +5,27 @@ use super::*;
 /// How many files File ▸ Open recent keeps.
 pub const MAX_RECENT: usize = 20;
 
-/// Put `path` at the top of the recent files.
+/// Put `path` at the top of the recent files, spelled as an absolute path the way the system
+/// spells it (on Windows with `\`), so a file opened by any route, or by an agent, is listed once.
 pub(super) fn remember(s: &mut Session, path: &str) {
-    let r = &mut s.prefs.recent_files;
-    r.retain(|p| p != path);
-    r.insert(0, path.to_string());
-    r.truncate(MAX_RECENT);
+    let path = std::path::absolute(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
+    change_recent(s, crate::RecentChange::Opened(path));
+}
+
+/// Change the recent files, and note the change so it is kept at once and joins the list as kept
+/// rather than writing over what another window or an agent added ([`crate::Prefs::recent_changes`]).
+fn change_recent(s: &mut Session, change: crate::RecentChange) {
+    crate::apply_recent_changes(&mut s.prefs.recent_files, std::slice::from_ref(&change));
+    s.prefs.recent_changes.push(change);
+    s.prefs_unsaved = true;
+}
+
+/// Take every recent file `gone` matches off the list.
+fn forget_recent(s: &mut Session, gone: impl Fn(&String) -> bool) {
+    let removed: Vec<String> = s.prefs.recent_files.iter().filter(|r| gone(r)).cloned().collect();
+    for path in removed {
+        change_recent(s, crate::RecentChange::Removed(path));
+    }
 }
 
 pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
@@ -20,10 +35,10 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
     // or named: `index` counts the files listed.
     let listed = |r: &String| allowed(r, Access::Read);
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
-        s.prefs.recent_files.retain(|r| !listed(r));
+        forget_recent(s, listed);
     }
     if let Some(gone) = string(p, "remove") {
-        s.prefs.recent_files.retain(|r| *r != gone || !listed(r));
+        forget_recent(s, |r| *r == gone && listed(r));
     }
     let path = match (string(p, "path"), num(p, "index")) {
         (Some(path), _) => {
@@ -38,7 +53,7 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if let Some(path) = path {
         if !crate::file_access::exists(&path) {
-            s.prefs.recent_files.retain(|r| *r != path);
+            forget_recent(s, |r| *r == path);
             return Err(bad(CMD, format!("{path} no longer exists")));
         }
         return open(s, &json!({"path": path}));

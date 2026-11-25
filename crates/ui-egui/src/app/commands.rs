@@ -162,7 +162,7 @@ impl FigApp {
                         left.unwrap_or(if reset { PANEL_DEFAULT } else { self.ui.left_width }),
                         right.unwrap_or(if reset { PANEL_DEFAULT } else { self.ui.right_width }),
                     );
-                    self.services.save_prefs(&self.session.prefs);
+                    self.services.save_prefs(&mut self.session.prefs);
                 }
                 "focus.region" => self.ui.nav.step(r.data.get("step").and_then(Value::as_i64).unwrap_or(1).clamp(-4, 4) as i32),
                 "panel.layers" => self.ui.left_tab = LeftTab::File,
@@ -188,7 +188,7 @@ impl FigApp {
                 "home.gettingStarted" => {
                     self.ui.home = true;
                     self.ui.home_view.section = home::Section::Recents;
-                    self.services.save_prefs(&self.session.prefs);
+                    self.services.save_prefs(&mut self.session.prefs);
                 }
                 "dialog.saveAs" => self.save_as_dialog(),
                 "dialog.colorProfile" => self.ui.color_profile = self.session.doc().ok().map(|d| d.color_profile),

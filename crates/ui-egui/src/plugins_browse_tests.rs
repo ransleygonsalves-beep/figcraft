@@ -108,7 +108,7 @@ fn deliver(wire: &Arc<Mutex<Wire>>, bytes: &[u8]) -> usize {
 struct Saved(Arc<Mutex<Vec<figcraft_engine::Prefs>>>);
 
 impl crate::Services for Saved {
-    fn save_prefs(&mut self, prefs: &figcraft_engine::Prefs) {
+    fn save_prefs(&mut self, prefs: &mut figcraft_engine::Prefs) {
         self.0.lock().unwrap().push(prefs.clone());
     }
 }

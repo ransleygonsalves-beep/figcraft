@@ -44,6 +44,34 @@ fn one_recent_file_is_forgotten_and_nothing_opens() {
     // A path that isn't in the list changes nothing.
     s.execute("file.openRecent", &json!({"remove": "/tmp/zzz.fig"})).unwrap();
     assert_eq!(s.prefs.recent_files.len(), 2);
+    // What changed is noted for whoever keeps the preferences, to apply to the list as kept.
+    assert_eq!(s.prefs.recent_changes, vec![crate::RecentChange::Removed("/tmp/b.fig".into())]);
+    assert!(s.prefs_unsaved, "kept at once");
+}
+
+#[test]
+fn opening_saving_and_clearing_note_each_change_in_order() {
+    let dir = std::env::temp_dir().join(format!("figcraft-recent-changes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.figcraft").to_string_lossy().to_string();
+    let mut s = Session::new();
+    s.execute("file.saveAs", &json!({"path": a})).unwrap();
+    s.execute("file.openRecent", &json!({"clear": true})).unwrap();
+    use crate::RecentChange::{Opened, Removed};
+    assert_eq!(s.prefs.recent_changes, vec![Opened(a.clone()), Removed(a.clone())]);
+    // Applied to any list, they leave it as this session left its own.
+    let mut kept = vec!["/elsewhere/x.figcraft".to_string()];
+    crate::apply_recent_changes(&mut kept, &s.prefs.recent_changes);
+    assert_eq!(kept, ["/elsewhere/x.figcraft"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn one_file_spelled_two_ways_is_listed_once() {
+    let full = std::path::absolute("spelled.figcraft").unwrap().to_string_lossy().into_owned();
+    let mut files = vec![full, "/elsewhere/x.figcraft".to_string()];
+    crate::apply_recent_changes(&mut files, &[crate::RecentChange::Opened("spelled.figcraft".into())]);
+    assert_eq!(files, ["spelled.figcraft", "/elsewhere/x.figcraft"], "the older spelling goes");
 }
 
 #[test]

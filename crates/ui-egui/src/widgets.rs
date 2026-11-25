@@ -1403,6 +1403,15 @@ pub fn button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Respons
     resp
 }
 
+/// A download's or file's size for people: `1.2 MB`, `340 KB`, `12 B`.
+pub fn byte_size(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / f64::from(1 << 20)),
+        b if b >= 1 << 10 => format!("{} KB", b.div_ceil(1 << 10)),
+        b => format!("{b} B"),
+    }
+}
+
 /// Text in a row.
 pub fn label(ui: &mut Ui, text: &str, color: Color32) {
     ui.label(egui::RichText::new(text).font(regular(11.0)).color(color));

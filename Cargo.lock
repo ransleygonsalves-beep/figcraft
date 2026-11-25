@@ -2135,6 +2135,7 @@ dependencies = [
  "figcraft-collab-net",
  "figcraft-engine",
  "figcraft-format",
+ "figcraft-settings",
  "figcraft-text",
  "figcraft-ui-egui",
  "fmv-macos-events",
@@ -2165,6 +2166,7 @@ dependencies = [
  "figcraft-format",
  "figcraft-mcp",
  "figcraft-render",
+ "figcraft-settings",
  "figcraft-svg",
  "figcraft-text",
  "serde_json",
@@ -2409,6 +2411,16 @@ dependencies = [
  "tungstenite",
  "wat",
  "zip 2.6.1",
+]
+
+[[package]]
+name = "figcraft-settings"
+version = "0.18.1"
+dependencies = [
+ "craft-settings",
+ "figcraft-engine",
+ "log",
+ "serde_json",
 ]
 
 [[package]]

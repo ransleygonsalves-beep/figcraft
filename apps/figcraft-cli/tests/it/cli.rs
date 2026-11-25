@@ -3,8 +3,12 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// The binary with no settings folder (`FIGCRAFT_CONFIG_DIR` set but empty), so the files a test
+/// runs never join the user's recent files.
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_figcraft-cli"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_figcraft-cli"));
+    c.env("FIGCRAFT_CONFIG_DIR", "");
+    c
 }
 
 fn tmp(name: &str) -> std::path::PathBuf {

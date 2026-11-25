@@ -22,6 +22,41 @@ fn read_ui_scale<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<
     Ok(Value::deserialize(d)?.as_f64().and_then(clamp_ui_scale).unwrap_or(1.0))
 }
 
+/// One change to the recent files ([`Prefs::recent_changes`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecentChange {
+    /// A file was opened or saved: it goes to the top.
+    Opened(String),
+    /// A file was taken off the list.
+    Removed(String),
+}
+
+/// Apply `changes` to the recent files `files`, in order (newest first, at most
+/// [`cmd::file::MAX_RECENT`]). A path matches the file however it is spelled (`/` or `\`,
+/// relative or absolute), so a file is listed once.
+pub fn apply_recent_changes(files: &mut Vec<String>, changes: &[RecentChange]) {
+    for change in changes {
+        match change {
+            RecentChange::Opened(path) => {
+                let key = same_file_key(path);
+                files.retain(|p| same_file_key(p) != key);
+                files.insert(0, path.clone());
+            }
+            RecentChange::Removed(path) => {
+                let key = same_file_key(path);
+                files.retain(|p| same_file_key(p) != key);
+            }
+        }
+    }
+    files.truncate(cmd::file::MAX_RECENT);
+}
+
+/// `path` as an absolute path the way the system spells it, to tell two spellings of one file
+/// apart from two files (no disk access: links aren't followed).
+fn same_file_key(path: &str) -> std::path::PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.into())
+}
+
 /// App-wide preferences that commands read (nudge amounts, behaviours).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -85,6 +120,14 @@ pub struct Prefs {
     /// Recently opened or saved files, newest first (File ▸ Open recent; at most
     /// [`cmd::file::MAX_RECENT`]).
     pub recent_files: Vec<String>,
+    /// What this session did to [`Self::recent_files`] since they were last kept. Whoever keeps
+    /// the preferences applies these to the list as kept now (another window or an agent may have
+    /// changed it meanwhile) instead of writing this session's list over it, then empties them.
+    #[serde(skip)]
+    pub recent_changes: Vec<RecentChange>,
+    /// Files AI agents and scripts open or save (`figcraft-cli mcp`, `figcraft-cli run`) join the
+    /// recent files too (`pref.agentRecents`).
+    pub agent_recents: bool,
     /// The files you put on a server without its key, with their owner tokens (passwords: see
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
@@ -155,6 +198,8 @@ impl Default for Prefs {
             plugin_directory: None,
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
+            recent_changes: Vec::new(),
+            agent_recents: true,
             online_files: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,

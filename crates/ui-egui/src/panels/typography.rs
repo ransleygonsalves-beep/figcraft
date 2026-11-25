@@ -28,7 +28,7 @@ mod picker;
 mod spacing;
 
 use fields::{font_rows, paragraph_rows};
-pub(crate) use picker::font_picker;
+pub(crate) use picker::{font_picker, remember_family};
 pub(crate) use spacing::{letter_spacing_of, line_height_of, parse_letter_spacing, parse_line_height};
 
 /// Font sizes offered by the size dropdown.

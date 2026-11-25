@@ -234,12 +234,15 @@ fn family_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], family: Option<&str
         ask = offer && local_fonts_item(ui);
         ask
     };
-    let pick = font_picker(ui, &resp, family, w.max(240.0), before_search);
+    let pick = font_picker(ui, &resp, family, w.max(240.0), true, before_search);
     if ask {
         app.services.ask_for_local_fonts();
     }
     let Some(pick) = pick else { return };
-    if let Some(f) = pick.picked {
+    if let Some(f) = pick.download {
+        // It goes on this text once it's installed.
+        crate::font_download::request(app, f, ids.to_vec(), range);
+    } else if let Some(f) = pick.picked {
         remember_family(ui.ctx(), &f);
         apply_style(app, "fontFamily", json!(f));
     } else if let Some(h) = pick.hovered.or(pick.highlighted) {

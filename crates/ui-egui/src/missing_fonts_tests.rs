@@ -195,3 +195,26 @@ fn a_family_the_font_store_has_offers_download_and_asks_before_any_download() {
     assert_eq!(listed(&u)["consent"], Value::Null);
     assert!(!figcraft_engine::fonts::downloads_allowed() && figcraft_engine::fonts::downloads().is_empty());
 }
+
+#[test]
+fn a_family_picked_from_the_font_store_asks_before_any_download() {
+    figcraft_engine::fonts::download::use_store_dir(std::env::temp_dir().join(format!("figcraft-ui-font-store-{}", std::process::id())));
+    assert!(fonts_indexed());
+    let Some(offer) = figcraft_engine::fonts::catalog("Lato").into_iter().find(|o| o.family == "Lato") else {
+        eprintln!("skipped: Lato is installed");
+        return;
+    };
+    let mut u = Ui::new(Session::new());
+    let id = figcraft_doc::NodeId(u.app.run("text.create", json!({"text": "Hamburgefonstiv"})).unwrap()["id"].as_u64().unwrap());
+    // As the font menu's Google Fonts and Noto section reports a pick.
+    crate::font_download::request(&mut u.app, offer.family.clone(), vec![id], None);
+    u.frame(vec![]);
+    assert_eq!(u.app.inspect()["fontDownload"], json!({"family": "Lato", "consent": true}), "downloading is off: the user is asked first");
+    let shown = crate::import_report_tests::shown_texts(u.frame_output(vec![]).shapes);
+    assert!(shown.iter().any(|t| t == "Allow downloading fonts?"), "{shown:?}");
+    assert!(figcraft_engine::fonts::downloads().is_empty(), "nothing downloads before the user allows it");
+
+    click_button(&mut u, "Not now");
+    assert_eq!(u.app.inspect()["fontDownload"], Value::Null);
+    assert!(!figcraft_engine::fonts::downloads_allowed() && figcraft_engine::fonts::downloads().is_empty());
+}

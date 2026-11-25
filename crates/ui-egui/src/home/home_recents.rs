@@ -619,15 +619,15 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
         Some(Action::Reveal(path)) => app.services.reveal_path(Path::new(&path)),
         Some(Action::Remove(path)) => {
             app.run("file.openRecent", json!({"remove": path}));
-            app.services.save_prefs(&app.session.prefs);
+            app.services.save_prefs(&mut app.session.prefs);
         }
         Some(Action::Sort(sort)) => {
             sort.store(&mut app.session.prefs);
-            app.services.save_prefs(&app.session.prefs);
+            app.services.save_prefs(&mut app.session.prefs);
         }
         Some(Action::View(view)) => {
             view.store(&mut app.session.prefs);
-            app.services.save_prefs(&app.session.prefs);
+            app.services.save_prefs(&mut app.session.prefs);
         }
         None => {}
     }

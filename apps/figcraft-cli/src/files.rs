@@ -422,6 +422,19 @@ pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
 /// file is refused before it is read (#1114).
 pub const MAX_SCRIPT: u64 = 1 << 30;
 
+/// Add what an agent's session or a script did to the recent files to the desktop app's list
+/// (the app's settings folder as the app beside this executable finds it), unless the user turned
+/// that off (`pref.agentRecents`).
+pub fn app_recents(changes: &[figcraft_engine::RecentChange]) {
+    // This crate's tests never touch the user's settings.
+    if cfg!(test) {
+        return;
+    }
+    if let Some(dir) = figcraft_settings::config_dir() {
+        figcraft_settings::record_recents(&dir, changes);
+    }
+}
+
 pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliResult<ExitCode> {
     let bytes = figcraft_engine::file_access::read_capped(script, MAX_SCRIPT).map_err(|e| CliError::Failed(e.to_string()))?;
     let text = String::from_utf8(bytes).map_err(|_| CliError::Failed(format!("{script}: not UTF-8")))?;
@@ -472,7 +485,10 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
             write_doc(&ds.doc, ds.page, out)?;
         }
         eprintln!("wrote {out}");
+        s.prefs.recent_changes.push(figcraft_engine::RecentChange::Opened(out.to_string()));
     }
+    // The file it read and the one it wrote, and any its commands opened or saved.
+    app_recents(&s.prefs.recent_changes);
     Ok(ExitCode::SUCCESS)
 }
 

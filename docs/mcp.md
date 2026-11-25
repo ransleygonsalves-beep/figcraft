@@ -304,10 +304,14 @@ Or in a project's `.mcp.json`:
   lists a font's axes and named instances (named instances are also valid `fontStyle` values).
   `text.missingFonts` lists the families the document names that aren't installed
   (`{families: [{family, layers, source}]}`); their text draws in a fallback font. On the desktop,
-  `font.download {family}` installs a family whose `source` isn't null (Google Fonts, Noto) from
-  the font store, in the background: pinned, checksum-verified files into the Craft apps' shared
-  font folder. It works only while the user has allowed downloading fonts, which only the user can
-  do, in the app's Missing fonts window; otherwise it is refused. Call it again for its progress
+  `font.catalog {query?}` lists the families the font store has that aren't installed, by name
+  (`{families: [{family, source, size}]}`, `size` in bytes to download; `query` matches part of the
+  name, any case); the font menu shows them under Google Fonts and Noto.
+  `font.download {family}` installs a family whose `source` isn't null (Google Fonts, Noto), or one
+  `font.catalog` lists, from the font store, in the background: pinned, checksum-verified files
+  into the Craft apps' shared font folder. It works only while the user has allowed downloading
+  fonts, which only the user can do, in the app's Missing fonts window or when picking such a
+  family from the font menu; otherwise it is refused. Call it again for its progress
   (`{state: downloading, done, total}`); once installed, the call fits the open document's text to
   the font (`{state: installed, refitted}`). `font.downloads` lists the downloads and whether
   downloading is allowed (`{allowed, downloads: [{family, state, error?}]}`). Fonts are indexed once
@@ -783,6 +787,12 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   nested layers), Escape or a click drops it.
 - `pref.reduceMotion {on?}`: reduced motion (the interface's own animations off; the system's
   accessibility setting turns it on too). Prototype transitions still play.
+- `pref.agentRecents {on?}`: whether the files an agent opens or saves join the app's recent
+  files (on by default). A headless `figcraft-cli mcp` session adds them after each call that
+  opened or saved one, and `figcraft-cli run` adds its `--in` and `--out` files, to the settings
+  folder the app beside the CLI uses, with absolute paths; attached, the app keeps them itself.
+  Only the recent files change, and they are merged with what the app and other agents kept
+  (the app too merges its own when it keeps them), so no one's files are lost.
 - `pref.uiScale {scale?}`: how large the whole interface is drawn, relative to the system's display
   scale: 1 (the default) is the system's own size on every screen, 1.25 means 125 %, not 125; from
   0.75 to 3 (outside the range it stops at the nearest end; `"auto"` is 1). Omit `scale` to read it.

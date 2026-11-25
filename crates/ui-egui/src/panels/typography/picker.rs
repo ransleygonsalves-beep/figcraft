@@ -1,4 +1,6 @@
-use super::{Align2, CornerRadius, Icon, Id, Rect, Sense, Tokens, Ui, icons, pos2, regular, semibold, tr, vec2, widgets};
+use figcraft_engine::fonts::{Offer, catalog};
+
+use super::{Align2, CornerRadius, Icon, Id, Rect, Sense, Tokens, Ui, icons, pos2, regular, semibold, tr, trf, vec2, widgets};
 
 // ---- Font picker ----
 
@@ -16,7 +18,7 @@ fn recent_families(ctx: &egui::Context) -> Vec<String> {
 
 /// Remember a font family at the front of the recent list, removing an earlier
 /// case-insensitive match and keeping at most eight entries.
-pub(super) fn remember_family(ctx: &egui::Context, family: &str) {
+pub(crate) fn remember_family(ctx: &egui::Context, family: &str) {
     ctx.data_mut(|d| {
         let v = d.get_persisted_mut_or_default::<Vec<String>>(Id::unique(RECENT_KEY));
         v.retain(|f| !f.eq_ignore_ascii_case(family));
@@ -28,6 +30,28 @@ pub(super) fn remember_family(ctx: &egui::Context, family: &str) {
 enum PickRow {
     Header(&'static str),
     Family(String),
+    /// A family the font store has that isn't installed: picking it downloads it.
+    Offer(Offer),
+}
+
+impl PickRow {
+    /// The family a row picks or downloads (Up and Down step over the rest).
+    fn family(&self) -> Option<&str> {
+        match self {
+            Self::Family(f) => Some(f),
+            Self::Offer(o) => Some(&o.family),
+            Self::Header(_) => None,
+        }
+    }
+
+    /// What picking the row does.
+    fn pick(&self) -> Option<FontPick> {
+        match self {
+            Self::Family(f) => Some(FontPick { picked: Some(f.clone()), ..FontPick::default() }),
+            Self::Offer(o) => Some(FontPick { download: Some(o.family.clone()), ..FontPick::default() }),
+            Self::Header(_) => None,
+        }
+    }
 }
 
 /// What the family list did this frame.
@@ -35,6 +59,8 @@ enum PickRow {
 pub(crate) struct FontPick {
     /// The family clicked, or the one Enter picked.
     pub picked: Option<String>,
+    /// The not-installed family clicked, or the one Enter picked: the caller downloads it.
+    pub download: Option<String>,
     /// The family Up and Down are on (Enter picks it).
     pub highlighted: Option<String>,
     /// The family the pointer is over (the caller previews it on the canvas).
@@ -53,8 +79,8 @@ struct Header {
     hi: Option<usize>,
     /// The rows Up and Down moved this frame (the list scrolls to the row they are on).
     step: i64,
-    /// Enter picked this family.
-    entered: Option<String>,
+    /// What Enter picked.
+    entered: Option<FontPick>,
 }
 
 /// The searchable family menu under `anchor`: click a family, or step through it with Up and Down
@@ -64,11 +90,15 @@ struct Header {
 ///
 /// The search field and those rows stay in place; only the list scrolls. Headers ("Recent",
 /// "All fonts") are as tall as family rows, so the list is uniform and virtualised.
+///
+/// With `offers`, the families the font store has that aren't installed follow under "Google
+/// Fonts and Noto"; picking one reports it as [`FontPick::download`].
 pub(crate) fn font_picker(
     ui: &Ui,
     anchor: &egui::Response,
     current: Option<&str>,
     width: f32,
+    offers: bool,
     before_search: impl FnOnce(&mut Ui) -> bool,
 ) -> Option<FontPick> {
     let t = Tokens::get(ui.ctx());
@@ -116,15 +146,17 @@ pub(crate) fn font_picker(
                         rows.push(PickRow::Header(tr("All fonts")));
                     }
                 }
-                if matches.is_empty() {
+                let offered = if offers { catalog(&ql) } else { Vec::new() };
+                if matches.is_empty() && offered.is_empty() {
                     widgets::label(ui, tr("No fonts match"), t.text_tertiary);
                     return Header::default();
                 }
                 rows.extend(matches.into_iter().map(PickRow::Family));
-                let family = |i: usize| match rows.get(i) {
-                    Some(PickRow::Family(f)) => Some(f.clone()),
-                    _ => None,
-                };
+                if !offered.is_empty() {
+                    rows.push(PickRow::Header(tr("Google Fonts and Noto")));
+                    rows.extend(offered.into_iter().map(PickRow::Offer));
+                }
+                let family = |i: usize| rows.get(i).and_then(PickRow::family);
                 // A new search starts again; the first step starts from the current family.
                 let mut hi = ui.data(|d| d.get_temp::<(String, usize)>(hi_id)).filter(|(hq, _)| *hq == q).map(|(_, i)| i);
                 if step != 0 {
@@ -155,11 +187,7 @@ pub(crate) fn font_picker(
                 }
                 let mut entered = None;
                 if search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    let first = rows.iter().find_map(|r| match r {
-                        PickRow::Family(f) => Some(f.clone()),
-                        PickRow::Header(_) => None,
-                    });
-                    entered = hi.and_then(family).or(first);
+                    entered = hi.and_then(|i| rows.get(i)).and_then(PickRow::pick).or_else(|| rows.iter().find_map(PickRow::pick));
                     ui.close();
                 }
                 Header { rows, hi, step, entered }
@@ -167,8 +195,8 @@ pub(crate) fn font_picker(
             ROW,
             |h| h.rows.len(),
             |ui, range, h| {
-                if let Some(f) = h.entered {
-                    return FontPick { picked: Some(f), highlighted: None, hovered: None };
+                if let Some(pick) = h.entered {
+                    return pick;
                 }
                 if let (Some(i), true) = (h.hi, h.step != 0) {
                     // Scrolled just enough to show the row Up or Down moved to; it may be out of
@@ -179,12 +207,12 @@ pub(crate) fn font_picker(
                 }
                 let mut budget = 4;
                 let mut picked = None;
+                let mut download = None;
                 let mut hovered_family = None;
                 let hi = h.hi;
                 for (i, r) in h.rows.iter().enumerate().skip(range.start).take(range.len()) {
                     let w = ui.available_width();
-                    let (rect, resp) =
-                        ui.allocate_exact_size(vec2(w, ROW), if matches!(r, PickRow::Family(_)) { Sense::click() } else { Sense::hover() });
+                    let (rect, resp) = ui.allocate_exact_size(vec2(w, ROW), if r.family().is_some() { Sense::click() } else { Sense::hover() });
                     match r {
                         PickRow::Header(label) => {
                             ui.painter().text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, *label, semibold(10.5), t.text_secondary);
@@ -227,13 +255,49 @@ pub(crate) fn font_picker(
                                 hovered_family = Some(f.clone());
                             }
                         }
+                        // Not installed: its name in the UI font (there's no face to preview it
+                        // in) and what it costs to download; hovering previews nothing.
+                        PickRow::Offer(o) => {
+                            let hovered = resp.hovered() || hi == Some(i);
+                            if hovered {
+                                ui.painter().rect_filled(rect, CornerRadius::same(5), t.accent);
+                            }
+                            let size = widgets::byte_size(o.size);
+                            let name_clip = Rect::from_min_max(rect.min, pos2(rect.max.x - 64.0, rect.max.y));
+                            ui.painter().with_clip_rect(name_clip).text(
+                                pos2(rect.min.x + 22.0, rect.center().y),
+                                Align2::LEFT_CENTER,
+                                &o.family,
+                                regular(12.0),
+                                if hovered { t.accent_on } else { t.text },
+                            );
+                            ui.painter().text(
+                                pos2(rect.max.x - 8.0, rect.center().y),
+                                Align2::RIGHT_CENTER,
+                                &size,
+                                regular(11.0),
+                                if hovered { t.accent_on } else { t.text_secondary },
+                            );
+                            let source = o.source.clone().unwrap_or_default();
+                            resp.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::Button,
+                                    true,
+                                    trf("{family}: download {size} from {source}", &[("family", &o.family), ("size", &size), ("source", &source)]),
+                                )
+                            });
+                            if resp.clicked() {
+                                download = Some(o.family.clone());
+                                ui.close();
+                            }
+                        }
                     }
                 }
                 let highlighted = hi.and_then(|i| match h.rows.get(i) {
                     Some(PickRow::Family(f)) => Some(f.clone()),
                     _ => None,
                 });
-                FontPick { highlighted, picked, hovered: hovered_family }
+                FontPick { highlighted, picked, download, hovered: hovered_family }
             },
         )
 }

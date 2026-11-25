@@ -8,7 +8,7 @@
 //! have it: they install while the user has downloading on, are refused while it is off, and can
 //! never turn it on.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
@@ -16,9 +16,9 @@ use craft_font_catalog::{FontEnv, font_store_dir};
 use craft_font_store::{Caller, Cancel, FontStore, Index, Network};
 use serde_json::{Value, json};
 
-use super::Download;
+use super::{Download, Offer};
 use crate::cmd::CommandSpec;
-use crate::params::req_string;
+use crate::params::{req_string, string};
 use crate::{EngineError, Result, Session, bad, spec};
 
 /// Lower-case family → (spelling, download). Installs are the machine's, so the jobs are the
@@ -69,6 +69,27 @@ fn index() -> &'static Index {
 pub fn source(family: &str) -> Option<String> {
     let index = index();
     index.family(family.trim()).and_then(|f| index.source_of(f)).map(|s| s.name.clone())
+}
+
+/// The families the font store's index has that aren't installed and whose name contains `query`
+/// (ignoring case; blank: every one), by name. A name two sources share is offered once, from the
+/// first, as `font.download` gets it. No request: the index is the one compiled in.
+pub fn catalog(query: &str) -> Vec<Offer> {
+    let index = index();
+    // The index's names in lower case, made once (the font menu searches them as the user types).
+    static KEYS: OnceLock<Vec<String>> = OnceLock::new();
+    let keys = KEYS.get_or_init(|| index.families().iter().map(|f| f.family.to_lowercase()).collect());
+    let query = query.trim().to_lowercase();
+    let installed: HashSet<String> = figcraft_text::family_names().iter().map(|f| f.to_lowercase()).collect();
+    let mut offers: Vec<Offer> = Vec::new();
+    for (family, key) in index.families().iter().zip(keys) {
+        if !key.contains(&query) || installed.contains(key) || offers.last().is_some_and(|o| o.family.eq_ignore_ascii_case(&family.family)) {
+            continue;
+        }
+        let source = index.source_of(family).map(|s| s.name.clone());
+        offers.push(Offer { family: family.family.clone(), source, size: family.size() });
+    }
+    offers
 }
 
 /// Whether the user turned downloading fonts on (the setting is the store's, shared by every
@@ -140,13 +161,24 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"family": found.family, "source": source, "state": "downloading", "done": 0, "total": total, "files": found.files.len()}))
 }
 
-/// The font commands that download: `font.download` and `font.downloads`.
+/// The font commands that download: `font.catalog`, `font.download` and `font.downloads`.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!(
+            "font.catalog",
+            "Fonts to download",
+            "{query? (part of the family name, any case; default: every family)}  the families the font store (Google Fonts, Noto) has that aren't installed, by name; font.download installs one → {families: [{family, source, size (bytes to download)}]}",
+            false,
+            |_, p| {
+                let offers = catalog(&string(p, "query").unwrap_or_default());
+                let list: Vec<Value> = offers.iter().map(|o| json!({"family": o.family, "source": o.source, "size": o.size})).collect();
+                Ok(json!({"families": list}))
+            }
+        ),
+        spec!(
             "font.download",
             "Download font",
-            "{family}  downloads a missing font family from the font store (Google Fonts, Noto: pinned, checksum-verified files installed into the Craft apps' shared font folder) on a thread of its own; refused while the user has downloading turned off (only the user turns it on, in Text ▸ Missing fonts). Call again to see its progress; once it is installed, the call fits the open document's text to it (text.refit) → {family, state: downloading|installed, done?, total?, refitted?}",
+            "{family}  downloads a font family that isn't installed (a missing one, or one font.catalog offers) from the font store (Google Fonts, Noto: pinned, checksum-verified files installed into the Craft apps' shared font folder) on a thread of its own; refused while the user has downloading turned off (only the user turns it on, in Text ▸ Missing fonts). Call again to see its progress; once it is installed, the call fits the open document's text to it (text.refit) → {family, state: downloading|installed, done?, total?, refitted?}",
             true,
             download
         ),

@@ -937,7 +937,7 @@ fn font_family_menu(ui: &Ui, id: &str, def: &TextStyle, family_resp: &Response, 
         }
         picked
     };
-    if let Some(f) = crate::typography::font_picker(ui, family_resp, Some(&def.font_family), 260.0, apply_variable).and_then(|p| p.picked) {
+    if let Some(f) = crate::typography::font_picker(ui, family_resp, Some(&def.font_family), 260.0, false, apply_variable).and_then(|p| p.picked) {
         set_text(def, id, out, |d| {
             d.font_family = f.clone();
             let styles = figcraft_text::family_styles(&f);

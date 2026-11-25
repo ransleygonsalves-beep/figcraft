@@ -159,7 +159,9 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
                 None => Box::new(b),
             }
         }
-        None => Box::new(figcraft_mcp::Headless::new()),
+        // The files the agent opens or saves join the app's recent files (`pref.agentRecents`).
+        // Attached, the app keeps them itself.
+        None => Box::new(figcraft_mcp::Headless::new().with_recents(Box::new(files::app_recents))),
     };
     eprintln!("figcraft MCP server ({}) on stdio", backend.describe());
     if let Some(r) = &roots {
