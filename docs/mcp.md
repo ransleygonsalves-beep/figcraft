@@ -299,6 +299,13 @@ Or in a project's `.mcp.json`:
   layer with an image fill as it shows into filled vectors, one per colour, stacked largest first
   in a group just above it, and hides the layer; pixels more than half transparent are left out.
   Higher `detail` keeps smaller shapes and follows edges more closely. Returns `{ids, shapes}`.
+  `image.removeBackground {ids?}` (desktop only) makes everything but the subject of each layer's
+  top image fill transparent, with a local model (BiRefNet, MIT, 214 MiB, downloaded once). It
+  runs on its own thread: the first call returns `{state: downloading|loading|working, done,
+  total}`; call again (ids optional) for progress, and once done the next call in the same file
+  puts the images in as one undo step and returns `{state: removed, changed}`. About 15 s an image
+  on the CPU. It is refused until the user has allowed the model's download in the app's Remove
+  background window: agents can't allow it.
 - Text props (`fontFamily`, `fontStyle`, `fontSize`, `lineHeight`, `letterSpacing`, `textDecoration`,
   `textCase`, `textFills`, `fontVariations`…) apply to the whole layer, or to chars `start`..`end`
   when given (`text.style {id, start, end, …}` does the same). Styled ranges come back as

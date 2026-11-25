@@ -16,6 +16,7 @@ mod canvas;
 pub mod catalog;
 pub mod cmd;
 mod content;
+pub mod cutout;
 mod dev;
 pub mod events;
 mod extensions;
@@ -383,6 +384,8 @@ mod id_params_behaviour_tests;
 mod image_crop_tests;
 #[cfg(test)]
 mod image_readable_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod image_remove_background_tests;
 #[cfg(test)]
 mod image_vectorize_tests;
 #[cfg(test)]

@@ -35,6 +35,7 @@ pub mod font_download;
 pub mod import_report;
 pub mod missing_fonts;
 pub mod plugins_ui;
+pub mod remove_background;
 pub mod sampled_color;
 pub mod updates_ui;
 pub mod variables_panel;
@@ -219,6 +220,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::import_report::show(app, ctx);
     crate::missing_fonts::show(app, ctx);
     crate::font_download::show(app, ctx);
+    crate::remove_background::show(app, ctx);
     crate::sampled_color::show(app, ctx);
     let t = Tokens::get(ctx);
     if app.ui.about {

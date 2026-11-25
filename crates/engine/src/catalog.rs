@@ -159,6 +159,8 @@ pub static MENU: &[MenuItem] = &[
     m!("Object", "Crop image", "image.crop"),
     // FigCraft's own (in `OWN`): an image traced into filled vector shapes.
     m!("Object", "Vectorize image", "image.vectorize"),
+    // FigCraft's own (in `OWN`): a local model makes an image's background transparent.
+    m!("Object", "Remove background", "image.removeBackground"),
     m!("Object", SEP, ""),
     m!("Object", "Bring to front", "arrange.front"),
     m!("Object", "Bring forward", "arrange.forward"),
@@ -304,8 +306,16 @@ pub fn items() -> impl Iterator<Item = &'static MenuItem> {
 }
 
 /// Items of FigCraft's own that the parity count leaves out (as it does the `collab.` ones).
-const OWN: [&str; 7] =
-    ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts", "image.crop", "image.vectorize", "text.directionAuto"];
+const OWN: [&str; 8] = [
+    "file.newFromTemplate",
+    "file.newBoard",
+    "help.gettingStarted",
+    "text.missingFonts",
+    "image.crop",
+    "image.vectorize",
+    "image.removeBackground",
+    "text.directionAuto",
+];
 
 /// Coverage: (implemented, total, missing ids). `extra` lists ids implemented by the UI layer.
 pub fn parity(extra: &[&str]) -> (usize, usize, Vec<&'static str>) {
