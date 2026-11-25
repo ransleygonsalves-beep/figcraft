@@ -353,6 +353,7 @@ pub use dialogs::credits;
 pub use dialogs::import_report;
 pub use dialogs::missing_fonts;
 pub use dialogs::plugins_ui;
+pub use dialogs::remove_background;
 pub use dialogs::sampled_color;
 pub use dialogs::updates_ui;
 pub use dialogs::variables_panel;
@@ -573,6 +574,8 @@ pub struct UiState {
     /// Files the user opened whose fonts are yet to be checked (by document uid).
     pub font_checks: Vec<u64>,
     pub missing_fonts: Option<missing_fonts::Shown>,
+    /// The Remove background window and the job it follows.
+    pub remove_background: Option<remove_background::Shown>,
     /// The eyedropper's Cmd/Ctrl+Shift pick, to make a colour style or variable of.
     pub sampled_color: Option<sampled_color::SampledColor>,
     pub screenshot_requests: Vec<(u64, String)>,
@@ -746,6 +749,7 @@ impl Default for UiState {
             import_report: None,
             font_checks: Vec::new(),
             missing_fonts: None,
+            remove_background: None,
             sampled_color: None,
             screenshot_requests: Vec::new(),
             frame_ms: 0.0,

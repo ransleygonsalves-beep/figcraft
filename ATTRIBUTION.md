@@ -16,6 +16,15 @@ MIT OR Apache-2.0. No third-party icon sets are used.
 | `docs/images/` (all screenshots and exports: `shot-*.png`, `art-*.png`) | FigCraft contributors | Screenshots of FigCraft showing synthetic demo documents made in FigCraft, and PNG exports of those documents by FigCraft's renderer | MIT OR Apache-2.0 | No third-party artwork |
 | `examples/*.figcraft` | FigCraft contributors | Synthetic demo documents built through FigCraft's command API; invented copy, shapes and vectors drawn from scratch, no images or embedded fonts | MIT OR Apache-2.0 | Text uses Inter (OFL, from craft-fonts or the system); no third-party artwork |
 
+## Models downloaded at runtime (not in this repository)
+
+Fetched by the desktop app only after the user allows it, into the Craft apps' shared model
+folder, and checked against the SHA-256 below before use.
+
+| Model | Author | Source | Licence | Use |
+|---|---|---|---|---|
+| BiRefNet lite, general use (`BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx`, 214 MiB, SHA-256 `5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333`) | Zheng Peng et al., "Bilateral Reference for High-Resolution Dichotomous Image Segmentation" (CAAI AIR 2024) | The authors' release [v1](https://github.com/ZhengPeng7/BiRefNet/releases/tag/v1) | MIT (Copyright (c) 2024 ZhengPeng; full text in `NOTICE`) | Object ▸ Remove background (`image.removeBackground`), run unmodified with tract |
+
 ## Fonts (build input, not in this repository)
 
 Release builds embed fonts from the optional craft-fonts build input

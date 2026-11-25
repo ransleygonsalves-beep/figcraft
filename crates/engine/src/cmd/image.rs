@@ -48,6 +48,13 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             crop
         ),
+        spec!(
+            "image.removeBackground",
+            "Remove background",
+            "{ids?}  desktop only: a local model (BiRefNet, MIT) finds the subject of each layer's top image fill and makes every other pixel transparent, keeping the fill mode, crop and adjustments. The first call starts a job on its own thread and returns {state: downloading|loading|working, done, total}; call again for its progress (with or without ids). Once it is done, the next call in the same file puts the cut-out images in their paints as one undo step and returns {state: removed, changed}. The model (214 MiB) is downloaded once, and only after the user allowed it in the app's Remove background window; until then the command is refused",
+            true,
+            remove_background
+        ),
         spec!("image.presets", "Image presets", "{} → {builtIn: [{id, label, filters}], saved: [{name, filters}]}", false, |s, _| {
             let built_in: Vec<Value> = ImageFilters::PRESETS.iter().map(|(id, label, f)| json!({"id": id, "label": label, "filters": f})).collect();
             Ok(json!({"builtIn": built_in, "saved": s.doc()?.image_presets}))
@@ -264,4 +271,80 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
         None => doc.image_presets.push(preset),
     }
     Ok(json!({"name": name, "filters": filters}))
+}
+
+/// A running job's progress as the command and the app's window report it.
+fn phase_json(phase: &crate::cutout::Phase) -> Value {
+    use crate::cutout::Phase;
+    match phase {
+        Phase::Downloading { done, total } => json!({"state": "downloading", "done": done, "total": total}),
+        Phase::Loading => json!({"state": "loading"}),
+        Phase::Working { done, total } => json!({"state": "working", "done": done, "total": total}),
+    }
+}
+
+fn remove_background(s: &mut Session, p: &Value) -> Result<Value> {
+    use crate::cutout::{self, Job};
+    let cmd = "image.removeBackground";
+    let refuse = |why: &str| EngineError::Disabled(cmd.into(), why.into());
+    let uid = s.ds()?.uid;
+    // A finished job of this file: its images go in.
+    match cutout::take_finished(uid) {
+        Some(Job::Done { cuts, .. }) => return apply_cuts(s, cuts),
+        Some(Job::Failed { error, .. }) => return Err(bad(cmd, error)),
+        _ => {}
+    }
+    if let Some(Job::Running { doc, phase }) = cutout::status() {
+        if doc != uid {
+            return Err(refuse("the background is being removed in another file; try again when it is done"));
+        }
+        let state = phase_json(&phase);
+        s.request_ui(cmd, state.clone());
+        return Ok(state);
+    }
+    if cfg!(target_arch = "wasm32") {
+        return Err(refuse("Remove background works in the desktop app"));
+    }
+    let doc = s.doc()?;
+    let mut images = Vec::new();
+    for id in req_targets(cmd, s, p)? {
+        let Some(n) = doc.node(id) else { continue };
+        let Some(fill) = top_image_fill(n) else { continue };
+        let Some(PaintKind::Image(img)) = n.fills.get(fill).map(|f| &f.kind) else { continue };
+        let Some(data) = doc.images.get(&img.image) else { continue };
+        images.push((cutout::Target { node: id, fill, image: img.image.clone() }, data.bytes.clone()));
+    }
+    if images.is_empty() {
+        return Err(refuse("select a layer with an image fill"));
+    }
+    if !cutout::ready() {
+        s.request_ui(cmd, json!({"state": "needsModel"}));
+        return Err(refuse("the background removal model isn't downloaded yet; allow its download in the app's Remove background window"));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    cutout::start(uid, images);
+    let state = json!({"state": "downloading", "done": 0, "total": 0});
+    s.request_ui(cmd, state.clone());
+    Ok(state)
+}
+
+/// Put finished cut-outs in the paints that still show the images they were made from.
+fn apply_cuts(s: &mut Session, cuts: Vec<crate::cutout::Cut>) -> Result<Value> {
+    let cmd = "image.removeBackground";
+    let doc = s.doc_mut()?;
+    let mut changed = 0;
+    for cut in cuts {
+        let (image, ..) = crate::cmd::create::add_readable_image(doc, cut.png).map_err(|e| bad(cmd, e))?;
+        let Ok(n) = doc.get_mut(cut.target.node) else { continue };
+        if let Some(PaintKind::Image(img)) = n.fills.get_mut(cut.target.fill).map(|f| &mut f.kind)
+            && img.image == cut.target.image
+        {
+            img.image = image;
+            n.styles.fill = None;
+            changed += 1;
+        }
+    }
+    let state = json!({"state": "removed", "changed": changed});
+    s.request_ui(cmd, state.clone());
+    Ok(state)
 }

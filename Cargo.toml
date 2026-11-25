@@ -50,6 +50,9 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 # The suite's font store: exact lookup of a missing font in the pinned Google Fonts and Noto
 # indexes, and checksum-verified installs into the one folder every Craft app reads (craft-libs).
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
+craft-ai = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
+tract-onnx = "0.23.10"
+tract-linalg = { version = "0.23.10", features = ["multithread-mm"] }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 # Shared dropdown menus: a combo box whose menu grows back after shrinking (craft-libs).
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
