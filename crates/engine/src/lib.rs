@@ -384,6 +384,8 @@ mod image_crop_tests;
 #[cfg(test)]
 mod image_readable_tests;
 #[cfg(test)]
+mod image_vectorize_tests;
+#[cfg(test)]
 mod images_left_in_file_tests;
 #[cfg(test)]
 mod import_export_tests;

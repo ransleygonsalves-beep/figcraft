@@ -1,11 +1,15 @@
-//! Image paints: adjustment presets, built in and saved in the file, and Crop image.
+//! Image paints: adjustment presets, built in and saved in the file, Crop image, and Vectorize
+//! image (an image traced into filled shapes, [`figcraft_pathops::trace`]).
 
+use figcraft_color::Color;
 use figcraft_color::{ImageFilters, ImageScaleMode, Paint, PaintKind};
-use figcraft_doc::{Document, ImagePreset, Node};
+use figcraft_doc::{Document, ImagePreset, Node, NodeId, NodeKind, VectorNetwork};
+use figcraft_geom::Affine;
+use figcraft_pathops::trace::{TraceOptions, trace};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{f64_of, get, req_index, req_string, req_targets, string, targets};
+use crate::params::{f64_of, get, num_or, req_index, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -47,6 +51,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids? (one layer), index? (an image fill; default its top visible one)} → {id, index}: the image fill switches to Crop, keeping the picture where it was, and the canvas enters crop mode on it",
             true,
             crop
+        ),
+        spec!(
+            "image.vectorize",
+            "Vectorize image",
+            "{ids?, colors? (2–64, default 16), detail? (0–1, default 0.5: higher keeps smaller shapes and follows edges more closely)}  traces each layer with an image fill as it shows (crop, fill mode and adjustments included) into filled vector shapes, one per colour, stacked largest first in a group placed just above it; the layer itself is hidden, not removed. Pixels more than half transparent are left out, so an image whose background was removed traces without it. Returns {ids (the new groups), shapes (vectors made)}",
+            true,
+            vectorize
         ),
         spec!("image.presets", "Image presets", "{} → {builtIn: [{id, label, filters}], saved: [{name, filters}]}", false, |s, _| {
             let built_in: Vec<Value> = ImageFilters::PRESETS.iter().map(|(id, label, f)| json!({"id": id, "label": label, "filters": f})).collect();
@@ -264,4 +275,95 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
         None => doc.image_presets.push(preset),
     }
     Ok(json!({"name": name, "filters": filters}))
+}
+
+/// The longest side, in pixels, a layer is traced at.
+const TRACE_SIDE: f64 = 1024.0;
+
+fn vectorize(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "image.vectorize";
+    let ids = req_targets(cmd, s, p)?;
+    let colors = num_or(p, "colors", 16.0).round().clamp(2.0, figcraft_pathops::trace::MAX_COLORS as f64) as usize;
+    let detail = num_or(p, "detail", 0.5).clamp(0.0, 1.0);
+    let doc = s.doc_mut()?;
+    let refuse = |why: &str| EngineError::Disabled(cmd.into(), why.into());
+    let mut groups = Vec::new();
+    let mut shapes = 0;
+    for id in ids {
+        let n = doc.get(id)?;
+        if top_image_fill(n).is_none() {
+            continue;
+        }
+        if crate::components::owning_instance(doc, id).is_some() {
+            return Err(refuse("a layer inside an instance can't be vectorized; detach the instance first"));
+        }
+        let (group, made) = vectorize_one(doc, id, colors, detail).ok_or_else(|| refuse("the image couldn't be traced"))?;
+        groups.push(group);
+        shapes += made;
+    }
+    if groups.is_empty() {
+        return Err(refuse("select a layer with an image fill"));
+    }
+    s.set_selection(groups.clone());
+    Ok(json!({"ids": groups, "shapes": shapes}))
+}
+
+/// Trace layer `id` as it shows into a group of vectors just above it, and hide it: the group's id
+/// and how many vectors it holds.
+fn vectorize_one(doc: &mut Document, id: NodeId, colors: usize, detail: f64) -> Option<(NodeId, usize)> {
+    let bounds = doc.world_bounds(id)?;
+    // At most the image's own resolution: scaled up, its edges would blur into bands of colours
+    // in between.
+    let native = doc
+        .node(id)
+        .and_then(|n| top_image_fill(n).and_then(|i| n.fills.get(i)))
+        .and_then(|f| if let PaintKind::Image(img) = &f.kind { doc.images.get(&img.image) } else { None })
+        .map_or(f64::INFINITY, |d| (f64::from(d.width) / bounds.width().max(1.0)).max(f64::from(d.height) / bounds.height().max(1.0)));
+    let scale = (TRACE_SIDE / bounds.width().max(bounds.height()).max(1.0)).min(native.max(1.0));
+    let pix = figcraft_render::render_area_at(doc, &[id], bounds, scale, 0.0)?;
+    let (w, h) = (pix.width() as usize, pix.height() as usize);
+    // The renderer's pixels are premultiplied; the tracer reads plain colours.
+    let rgba: Vec<u8> = pix
+        .data()
+        .chunks_exact(4)
+        .flat_map(|c| {
+            let a = u16::from(c[3]);
+            let plain = |v: u8| (u16::from(v) * 255 + a / 2).checked_div(a).map_or(0, |x| u8::try_from(x).unwrap_or(u8::MAX));
+            [plain(c[0]), plain(c[1]), plain(c[2]), c[3]]
+        })
+        .collect();
+    let speckle = 2 + ((1.0 - detail).powi(2) * (w * h) as f64 * 0.0004) as usize;
+    let opt = TraceOptions { colors, speckle, tolerance: 0.4 + (1.0 - detail) * 1.6 };
+    let layers = trace(&rgba, w, h, &opt)?;
+    let n = doc.get(id).ok()?;
+    let parent = n.parent?;
+    let name = format!("{} vector", n.name);
+    let index = doc.index_in_parent(id).map(|i| i + 1);
+    let local = doc.world_transform(parent).inverse();
+    // Trace pixels to page units to the parent's space.
+    let to_local = local * Affine::translate((bounds.x0, bounds.y0)) * Affine::scale(1.0 / scale);
+    let gid = doc.alloc_id();
+    let mut group = Node::new(gid, NodeKind::Group, name, bounds.width(), bounds.height());
+    group.transform = local * Affine::translate((bounds.x0, bounds.y0));
+    doc.insert(group, parent, index).ok()?;
+    let to_group = (local * Affine::translate((bounds.x0, bounds.y0))).inverse() * to_local;
+    let mut made = 0;
+    for layer in layers {
+        let path = to_group * layer.path;
+        let mut net = VectorNetwork::from_path(&path);
+        let Some(bb) = net.bounds() else { continue };
+        net.translate(-bb.x0, -bb.y0);
+        let [r, g, b] = layer.color;
+        let vid = doc.alloc_id();
+        let mut v = Node::new(vid, NodeKind::Vector { network: net }, format!("#{r:02X}{g:02X}{b:02X}"), bb.width(), bb.height());
+        v.transform = Affine::translate((bb.x0, bb.y0));
+        v.fills = vec![Paint::solid(Color::from_rgba8(r, g, b, 255))];
+        doc.insert(v, gid, None).ok()?;
+        made += 1;
+    }
+    let _ = doc.fit_to_children(gid);
+    if let Ok(n) = doc.get_mut(id) {
+        n.visible = false;
+    }
+    Some((gid, made))
 }
