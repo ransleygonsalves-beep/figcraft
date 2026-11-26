@@ -11,7 +11,16 @@ const INVITE_GONE: &str = "this invite doesn't work: it was used, withdrawn or i
 
 /// Whether an account request changes something (counted against the address's budget).
 fn account_changes(req: &AccountReq) -> bool {
-    !matches!(req, AccountReq::Me | AccountReq::Files | AccountReq::Members { .. } | AccountReq::Invites | AccountReq::Users)
+    !matches!(
+        req,
+        AccountReq::Me
+            | AccountReq::Files
+            | AccountReq::Members { .. }
+            | AccountReq::Invites
+            | AccountReq::Users
+            | AccountReq::Versions { .. }
+            | AccountReq::Version { .. }
+    )
 }
 
 /// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
@@ -77,6 +86,7 @@ impl Backend for Store {
         if journal.is_empty() {
             return;
         }
+        self.note_editors(file, server, &journal);
         let (after, max_bytes) = (self.cfg.compact_after, self.cfg.compact_bytes);
         let Some(e) = self.files.get_mut(file) else { return };
         let Some(log) = e.log.as_mut() else { return };
@@ -106,6 +116,8 @@ impl Backend for Store {
     }
 
     fn idle(&mut self, file: &str, server: &mut Server) -> bool {
+        // Everyone left: what they changed is kept as a version.
+        self.checkpoint(file, server);
         let mut synced = false;
         let compact = self.files.get_mut(file).is_some_and(|entry| {
             let snapshot_seq = entry.meta.seq;
@@ -142,6 +154,7 @@ impl Backend for Store {
             self.write_opened(&file);
         }
         for (file, server) in open {
+            self.checkpoint(file, server);
             if self.files.get(file).and_then(|e| e.log.as_ref()).is_some_and(|l| l.dirty) {
                 self.compact(file, server);
             }
@@ -341,7 +354,14 @@ impl Backend for Store {
         Ok(OpenedAccount { user: signed.user.id, session: signed.session, reply: AccountReply::SignedIn { token: signed.token, user: signed.user } })
     }
 
-    fn account(&mut self, ip: IpAddr, user: u64, session: &str, req: AccountReq, _open: &dyn Fn(&str) -> Option<OpenFile>) -> AccountHandled {
+    fn account(
+        &mut self,
+        ip: IpAddr,
+        user: u64,
+        session: &str,
+        req: AccountReq,
+        live: &dyn Fn(&str) -> Option<Vec<figcraft_collab::Change>>,
+    ) -> AccountHandled {
         let Some(me) = self.accounts.user(user).filter(|u| !u.disabled) else {
             return AccountHandled { signed_out: vec![user], ..AccountReply::Failed { reason: "you were signed out of this server".into() }.into() };
         };
@@ -370,6 +390,22 @@ impl Backend for Store {
             },
             AccountReq::RemoveFile { file } => match self.account_manages(&me, &file).and_then(|()| self.remove(&file)) {
                 Ok(()) => AccountHandled { removed: Some(file), ..AccountReply::Done.into() },
+                Err(e) => failed(e),
+            },
+            AccountReq::Versions { file } => self.versions_for(&me, &file).map_or_else(failed, |v| AccountReply::Versions(v).into()),
+            AccountReq::Version { file, id } => {
+                self.version(&me, &file, &id).map_or_else(failed, |(info, snapshot)| AccountReply::Version { info, snapshot }.into())
+            }
+            AccountReq::SaveVersion { file, name, description } => match self.save_version(&me, &file, &name, &description, live(&file)) {
+                Ok(()) => AccountReply::Versions(self.versions(&file)).into(),
+                Err(e) => failed(e),
+            },
+            AccountReq::RenameVersion { file, id, name, description } => match self.change_version(&me, &file, &id, Some((&name, &description))) {
+                Ok(()) => AccountReply::Versions(self.versions(&file)).into(),
+                Err(e) => failed(e),
+            },
+            AccountReq::DeleteVersion { file, id } => match self.change_version(&me, &file, &id, None) {
+                Ok(()) => AccountReply::Versions(self.versions(&file)).into(),
                 Err(e) => failed(e),
             },
             AccountReq::ChangePassword { old, new } => {

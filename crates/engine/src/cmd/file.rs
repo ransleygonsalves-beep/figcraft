@@ -44,7 +44,7 @@ pub(crate) use save::save_ends_preview;
 pub use save::{FileSnapshot, file_bytes, file_bytes_at, thumbnail};
 use save::{color_profile, mark_saved, save, save_as};
 pub use version::MAX_AUTOSAVES;
-pub(crate) use version::{add_version, keep_in_history, read_version, unique_id};
+pub(crate) use version::{add_version, keep_in_history, read_version, replace_design, unique_id};
 use version::{autosave, restore_version, save_version, version_index, version_json, version_list};
 
 /// A new file of `kind` in a tab of its own.

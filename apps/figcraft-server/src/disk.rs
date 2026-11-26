@@ -19,7 +19,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use figcraft_collab::message;
-use figcraft_collab::{Journal, SessionState};
+use figcraft_collab::{Change, Journal, SessionState};
 
 pub const SNAPSHOT: &str = "snapshot.bin";
 pub const LOG: &str = "log.bin";
@@ -34,6 +34,8 @@ const SNAP_MAGIC: &[u8; 4] = b"FCSN";
 const LOG_MAGIC: &[u8; 4] = b"FCLG";
 const FORMAT: u8 = 1;
 const SNAP_HEADER: usize = 4 + 1 + 8 + 4;
+const VERSION_MAGIC: &[u8; 4] = b"FCVR";
+const VERSION_HEADER: usize = 4 + 1 + 4;
 pub const LOG_HEADER: usize = 4 + 1 + 8;
 const RECORD_HEADER: usize = 8;
 
@@ -181,6 +183,31 @@ fn snapshot_body(bytes: &[u8]) -> Result<(u64, &[u8]), String> {
         return Err("the snapshot is damaged (checksum mismatch)".into());
     }
     Ok((generation, body))
+}
+
+/// A version's design as its file holds it: [`VERSION_MAGIC`], the format, a checksum of the
+/// body, then the changes that build it.
+pub fn encode_changes(changes: &[Change]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(VERSION_HEADER);
+    out.extend_from_slice(VERSION_MAGIC);
+    out.push(FORMAT);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    let mut out = message::encode_into(&changes, out).map_err(|e| e.to_string())?;
+    let sum = crc(&out[VERSION_HEADER..]);
+    out[VERSION_HEADER - 4..VERSION_HEADER].copy_from_slice(&sum.to_le_bytes());
+    Ok(out)
+}
+
+/// The changes a version's file holds, when its header and checksum are right.
+pub fn decode_changes(bytes: &[u8]) -> Result<Vec<Change>, String> {
+    if bytes.get(..4) != Some(VERSION_MAGIC.as_slice()) || bytes.get(4) != Some(&FORMAT) {
+        return Err("the version's file isn't one this server reads".into());
+    }
+    let (Some(sum), Some(body)) = (u32_at(bytes, 5), bytes.get(VERSION_HEADER..)) else { return Err("the version's file is cut short".into()) };
+    if crc(body) != sum {
+        return Err("the version's file is damaged (checksum mismatch)".into());
+    }
+    message::decode::<Vec<Change>>(body, body.len()).map_err(|e| format!("the version can't be read: {e}"))
 }
 
 /// A snapshot's generation, after checking its header and checksum (no decoding).

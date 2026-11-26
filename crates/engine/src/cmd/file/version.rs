@@ -142,10 +142,17 @@ pub(super) fn restore_version(s: &mut Session, p: &Value) -> Result<Value> {
     let ds = s.ds_mut()?;
     let i = version_index(CMD, ds, p)?;
     let v = ds.versions.get(i).ok_or_else(|| bad(CMD, "no such version"))?;
-    let (id, mut doc) = (v.id.clone(), read_version(v)?);
+    let (id, doc) = (v.id.clone(), read_version(v)?);
     // Restoring never loses work: the document as it is goes into the history first.
     keep_in_history(ds);
     let out = ds.versions.iter().enumerate().find(|(_, v)| v.id == id).map_or(Value::Null, |(i, v)| version_json(i, v));
+    replace_design(ds, doc);
+    Ok(out)
+}
+
+/// Put `doc`'s design in place of `ds`'s (a version being restored): the file's name, what it
+/// published and its comments stay.
+pub(crate) fn replace_design(ds: &mut DocState, mut doc: Arc<Document>) {
     let d = Arc::make_mut(&mut doc);
     d.name = ds.doc.name.clone();
     // What the file published belongs to the file, not to the version.
@@ -168,5 +175,4 @@ pub(super) fn restore_version(s: &mut Session, p: &Value) -> Result<Value> {
     ds.vector_edit = None;
     // The restored design is in the history already: restoring it again keeps nothing new.
     ds.mark_checkpoint();
-    Ok(out)
 }

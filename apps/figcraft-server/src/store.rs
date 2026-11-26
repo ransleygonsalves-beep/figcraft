@@ -62,6 +62,7 @@ mod library;
 mod links;
 mod members;
 pub(crate) mod team;
+mod versions;
 
 pub use library::library_name;
 
@@ -206,6 +207,12 @@ struct Meta {
     /// The other accounts that may open it, and what they may do.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     members: BTreeMap<u64, Access>,
+    /// Who changed it since its last version (see `versions`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    editors: Vec<String>,
+    /// When its last version was kept, or its history started (seconds since 1970; 0: not yet).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    checkpoint: u64,
 }
 
 impl Meta {
