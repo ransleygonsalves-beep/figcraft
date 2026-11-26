@@ -392,6 +392,11 @@ name = "English"
 "Ctrl+arrows" = "Ctrl+arrows"
 "Ctrl+click" = "Ctrl+click"
 "Ctrl+click a padding field" = "Ctrl+click a padding field"
+"Tracing the image…" = "Tracing the image…"
+"Tracing {n} images…" = { one = "Tracing {n} image…", other = "Tracing {n} images…" }
+"Vectorize image was cancelled" = "Vectorize image was cancelled"
+"Vectorized into {n} shapes" = { one = "Vectorized into {n} shape", other = "Vectorized into {n} shapes" }
+"You can keep working; the shapes appear when it's done." = "You can keep working; the shapes appear when it's done."
 "⌘ click a padding field" = "⌘ click a padding field"
 "Ctrl+scroll" = "Ctrl+scroll"
 "Current name" = "Current name"

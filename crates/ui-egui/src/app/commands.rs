@@ -239,6 +239,7 @@ impl FigApp {
                 "layers.collapseAll" => layers::collapse_all(self),
                 "contextMenu" => self.ui.key_menu = true,
                 "selectArea" => self.start_key_box(),
+                "image.vectorize" => crate::vectorize_progress::request(self, &r.data),
                 "image.crop" => {
                     // Crop mode takes the canvas: an open colour picker would edit the same paint.
                     self.ui.picker = None;

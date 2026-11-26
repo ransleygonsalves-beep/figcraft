@@ -322,6 +322,8 @@ mod vector_point_xy_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
 #[cfg(test)]
+mod vectorize_progress_tests;
+#[cfg(test)]
 mod vote_history_ui_tests;
 #[cfg(test)]
 mod vote_voters_tests;
@@ -356,6 +358,7 @@ pub use dialogs::plugins_ui;
 pub use dialogs::sampled_color;
 pub use dialogs::updates_ui;
 pub use dialogs::variables_panel;
+pub use dialogs::vectorize_progress;
 pub use home::home_recents;
 pub use home::online;
 pub use panels::assets_panel;
@@ -573,6 +576,8 @@ pub struct UiState {
     /// Files the user opened whose fonts are yet to be checked (by document uid).
     pub font_checks: Vec<u64>,
     pub missing_fonts: Option<missing_fonts::Shown>,
+    /// The Vectorize image window and the tracing job it follows.
+    pub vectorizing: Option<vectorize_progress::Shown>,
     /// The eyedropper's Cmd/Ctrl+Shift pick, to make a colour style or variable of.
     pub sampled_color: Option<sampled_color::SampledColor>,
     pub screenshot_requests: Vec<(u64, String)>,
@@ -746,6 +751,7 @@ impl Default for UiState {
             import_report: None,
             font_checks: Vec::new(),
             missing_fonts: None,
+            vectorizing: None,
             sampled_color: None,
             screenshot_requests: Vec::new(),
             frame_ms: 0.0,

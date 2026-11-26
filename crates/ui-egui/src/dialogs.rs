@@ -37,6 +37,7 @@ pub mod plugins_ui;
 pub mod sampled_color;
 pub mod updates_ui;
 pub mod variables_panel;
+pub mod vectorize_progress;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -215,6 +216,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::pending_open::pending_opens(app, ctx);
     crate::import_report::show(app, ctx);
     crate::missing_fonts::show(app, ctx);
+    crate::vectorize_progress::show(app, ctx);
     crate::sampled_color::show(app, ctx);
     let t = Tokens::get(ctx);
     if app.ui.about {
