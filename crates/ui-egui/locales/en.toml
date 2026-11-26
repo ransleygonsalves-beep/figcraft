@@ -400,7 +400,6 @@ name = "English"
 "Ctrl+arrows" = "Ctrl+arrows"
 "Ctrl+click" = "Ctrl+click"
 "Ctrl+click a padding field" = "Ctrl+click a padding field"
-<<<<<<< HEAD
 "Download and remove" = "Download and remove"
 "Downloading the model… {done} of {total} MB" = "Downloading the model… {done} of {total} MB"
 "Each image takes about 15 seconds. You can keep working while it runs." = "Each image takes about 15 seconds. You can keep working while it runs."
@@ -428,7 +427,6 @@ name = "English"
 "Vectorize image…" = "Vectorize image…"
 "Vectorized into {n} shapes" = { one = "Vectorized into {n} shape", other = "Vectorized into {n} shapes" }
 "You can keep working; the shapes appear when it's done." = "You can keep working; the shapes appear when it's done."
-=======
 "Disabled" = "Disabled"
 "Email" = "Email"
 "I already have an account" = "I already have an account"
@@ -464,7 +462,6 @@ name = "English"
 "Yours" = "Yours"
 "an account" = "an account"
 "an admin account" = "an admin account"
->>>>>>> feat/accounts
 "⌘ click a padding field" = "⌘ click a padding field"
 "Ctrl+scroll" = "Ctrl+scroll"
 "Current name" = "Current name"
