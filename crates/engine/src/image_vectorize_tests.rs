@@ -106,3 +106,45 @@ fn the_tracing_runs_on_its_own_thread_and_can_be_cancelled() {
     assert_eq!(ex(&mut s, "image.vectorize", json!({}))["state"], "cancelled");
     assert!(vectorize::status().is_none(), "the job is gone");
 }
+
+#[test]
+fn one_colour_mode_and_what_becomes_of_the_original() {
+    let mut s = Session::new();
+    // One colour: the red disc is darker than 0.9 of white, the white around it isn't.
+    let img = disc_layer(&mut s);
+    let r = ex(&mut s, "image.vectorize", json!({"ids": [img], "mode": "mono", "threshold": 0.9, "wait": true}));
+    assert_eq!(r["shapes"], 1, "one shape: {r}");
+    // Remove: the image goes.
+    s.execute("edit.undo", &json!({})).unwrap();
+    ex(&mut s, "image.vectorize", json!({"ids": [img], "colors": 2, "original": "remove", "wait": true}));
+    assert!(s.doc().unwrap().node(img).is_none(), "the image was deleted");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.doc().unwrap().node(img).is_some(), "undo brings it back");
+    // Keep: the image stays visible under the shapes.
+    ex(&mut s, "image.vectorize", json!({"ids": [img], "colors": 2, "original": "keep", "wait": true}));
+    assert!(s.doc().unwrap().node(img).unwrap().visible);
+    // Unknown choices are refused, naming the ones there are.
+    let e = s.execute("image.vectorize", &json!({"ids": [img], "mode": "sepia", "wait": true})).unwrap_err();
+    assert!(e.to_string().contains("color|mono"), "{e}");
+    let e = s.execute("image.vectorize", &json!({"ids": [img], "original": "archive", "wait": true})).unwrap_err();
+    assert!(e.to_string().contains("hide|remove|keep"), "{e}");
+}
+
+#[test]
+fn the_preview_shows_the_shapes_and_changes_nothing() {
+    use base64::Engine as _;
+    let mut s = Session::new();
+    let img = disc_layer(&mut s);
+    let before = s.doc().unwrap().clone();
+    let r = ex(&mut s, "image.vectorizePreview", json!({"ids": [img], "colors": 2}));
+    assert_eq!(r["shapes"], 2);
+    assert!(r["width"].as_u64().unwrap() <= 360 && r["height"].as_u64().unwrap() <= 360, "{r}");
+    let png = base64::engine::general_purpose::STANDARD.decode(r["png"].as_str().unwrap()).unwrap();
+    let pic = image::load_from_memory(&png).unwrap().to_rgba8();
+    // The disc's centre is red and opaque in the picture.
+    let c = pic.get_pixel(pic.width() / 2, pic.height() / 2);
+    assert!(c[0] > 180 && c[1] < 80 && c[3] == 255, "{c:?}");
+    assert_eq!(*s.doc().unwrap(), before, "nothing changed");
+    // One colour previews as one shape.
+    assert_eq!(ex(&mut s, "image.vectorizePreview", json!({"ids": [img], "mode": "mono", "threshold": 0.9}))["shapes"], 1);
+}

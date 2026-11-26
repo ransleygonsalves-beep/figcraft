@@ -5,11 +5,10 @@ use figcraft_color::Color;
 use figcraft_color::{ImageFilters, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::{Document, ImagePreset, Node, NodeId, NodeKind, VectorNetwork};
 use figcraft_geom::Affine;
-use figcraft_pathops::trace::TraceOptions;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{boolean, f64_of, get, num_or, req_index, req_string, req_targets, string, targets};
+use crate::params::{boolean, f64_of, get, req_index, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -55,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "image.vectorize",
             "Vectorize image",
-            "{ids?, colors? (2–64, default 16), detail? (0–1, default 0.5: higher keeps smaller shapes and follows edges more closely), wait? (bool), cancel? (bool)}  traces each layer with an image fill as it shows (crop, fill mode and adjustments included) into filled vector shapes, one per colour, stacked largest first in a group placed just above it; the layer itself is hidden, not removed. Pixels more than half transparent are left out, so an image whose background was removed traces without it. The tracing runs on its own thread: the first call returns {state: working, done (0–1), images}; call again (ids optional) for its progress, and once it is done the next call in the same file puts the shapes in as one undo step and returns {state: vectorized, ids (the new groups), shapes}. `cancel: true` stops a running job (the next call returns {state: cancelled}); `wait: true` traces in this call and returns the shapes at once (the browser always does)",
+            "{ids?, colors? (2–64, default 16), detail? (0–1, default 0.5: higher keeps smaller shapes), smoothness? (0–1, default 0.5: higher lets outlines stray further from the pixels for smoother curves), mode? (color|mono, default color; mono makes one shape of the pixels darker than `threshold`, for logos and line art), threshold? (0–1 of white, default 0.5), original? (hide|remove|keep, default hide: what becomes of the traced layer), wait? (bool), cancel? (bool)}  traces each layer with an image fill as it shows (crop, fill mode and adjustments included) into filled vector shapes, one per colour, stacked largest first in a group placed just above it. Pixels more than half transparent are left out, so an image whose background was removed traces without it. The tracing runs on its own thread: the first call returns {state: working, done (0–1), images}; call again (ids optional) for its progress, and once it is done the next call in the same file puts the shapes in as one undo step and returns {state: vectorized, ids (the new groups), shapes}. `cancel: true` stops a running job (the next call returns {state: cancelled}); `wait: true` traces in this call and returns the shapes at once (the browser always does)",
             true,
             vectorize
         ),
@@ -65,6 +64,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?}  desktop only: a local model (BiRefNet, MIT) finds the subject of each layer's top image fill and makes every other pixel transparent, keeping the fill mode, crop and adjustments. The first call starts a job on its own thread and returns {state: downloading|loading|working, done, total}; call again for its progress (with or without ids). Once it is done, the next call in the same file puts the cut-out images in their paints as one undo step and returns {state: removed, changed}. The model (214 MiB) is downloaded once, and only after the user allowed it in the app's Remove background window; until then the command is refused",
             true,
             remove_background
+        ),
+        spec!(
+            "image.vectorizePreview",
+            "Vectorize image preview",
+            "{ids? (the first layer with an image fill is shown), colors?, detail?, smoothness?, mode?, threshold?}  how `image.vectorize` would trace the layer with those options, at most 360 pixels on its longer side: {png (base64, the shapes over transparency), width, height, shapes}. Changes nothing. From the menu (Object ▸ Vectorize image…) it opens the options window, where the preview follows the options",
+            false,
+            vectorize_preview
         ),
         spec!("image.presets", "Image presets", "{} → {builtIn: [{id, label, filters}], saved: [{name, filters}]}", false, |s, _| {
             let built_in: Vec<Value> = ImageFilters::PRESETS.iter().map(|(id, label, f)| json!({"id": id, "label": label, "filters": f})).collect();
@@ -295,8 +301,11 @@ fn vectorize(s: &mut Session, p: &Value) -> Result<Value> {
     if boolean(p, "cancel") == Some(true) {
         return if job::cancel() { Ok(json!({"state": "cancelling"})) } else { Err(refuse("nothing is being vectorized")) };
     }
+    // The browser has no threads to trace on; `wait` asks for the shapes in this call, leaving
+    // any job alone.
+    let wait = cfg!(target_arch = "wasm32") || boolean(p, "wait") == Some(true);
     // A job of this file that ended: its shapes go in, or it says why not.
-    match job::take_finished(uid) {
+    match if wait { None } else { job::take_finished(uid) } {
         Some(Job::Done { traced, .. }) => return put_traced(s, traced),
         Some(Job::Cancelled { .. }) => {
             let state = json!({"state": "cancelled"});
@@ -306,7 +315,7 @@ fn vectorize(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Job::Failed { error, .. }) => return Err(bad(cmd, error)),
         _ => {}
     }
-    if let Some(Job::Running { doc, done, images }) = job::status() {
+    if let Some(Job::Running { doc, done, images }) = job::status().filter(|_| !wait) {
         if doc != uid {
             return Err(refuse("an image is being vectorized in another file; try again when it is done"));
         }
@@ -315,8 +324,7 @@ fn vectorize(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(state);
     }
     let ids = req_targets(cmd, s, p)?;
-    let colors = num_or(p, "colors", 16.0).round().clamp(2.0, figcraft_pathops::trace::MAX_COLORS as f64) as usize;
-    let detail = num_or(p, "detail", 0.5).clamp(0.0, 1.0);
+    let settings = crate::vectorize::Settings::from_params(cmd, p)?;
     let doc = s.doc()?;
     let mut sources = Vec::new();
     for id in ids {
@@ -326,13 +334,12 @@ fn vectorize(s: &mut Session, p: &Value) -> Result<Value> {
         if crate::components::owning_instance(doc, id).is_some() {
             return Err(refuse("a layer inside an instance can't be vectorized; detach the instance first"));
         }
-        sources.push(source(doc, id, colors, detail).ok_or_else(|| refuse("the image couldn't be traced"))?);
+        sources.push(source(doc, id, &settings, TRACE_SIDE).ok_or_else(|| refuse("the image couldn't be traced"))?);
     }
     if sources.is_empty() {
         return Err(refuse("select a layer with an image fill"));
     }
-    // The browser has no threads to trace on; `wait` asks for the shapes in this call.
-    if cfg!(target_arch = "wasm32") || boolean(p, "wait") == Some(true) {
+    if wait {
         let traced = job::run(&sources, &mut |_| true).map_err(|_| refuse("the image couldn't be traced"))?;
         return put_traced(s, traced);
     }
@@ -344,8 +351,9 @@ fn vectorize(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(state)
 }
 
-/// Layer `id` as it shows (crop, fill mode and adjustments included), ready to trace.
-fn source(doc: &Document, id: NodeId, colors: usize, detail: f64) -> Option<crate::vectorize::Source> {
+/// Layer `id` as it shows (crop, fill mode and adjustments included), ready to trace with its
+/// longer side at most `side` pixels (a preview's is smaller).
+pub(crate) fn source(doc: &Document, id: NodeId, settings: &crate::vectorize::Settings, side: f64) -> Option<crate::vectorize::Source> {
     let bounds = doc.world_bounds(id)?;
     // At most the image's own resolution: scaled up, its edges would blur into bands of colours
     // in between.
@@ -354,7 +362,9 @@ fn source(doc: &Document, id: NodeId, colors: usize, detail: f64) -> Option<crat
         .and_then(|n| top_image_fill(n).and_then(|i| n.fills.get(i)))
         .and_then(|f| if let PaintKind::Image(img) = &f.kind { doc.images.get(&img.image) } else { None })
         .map_or(f64::INFINITY, |d| (f64::from(d.width) / bounds.width().max(1.0)).max(f64::from(d.height) / bounds.height().max(1.0)));
-    let scale = (TRACE_SIDE / bounds.width().max(bounds.height()).max(1.0)).min(native.max(1.0));
+    let longest = bounds.width().max(bounds.height()).max(1.0);
+    let full = (TRACE_SIDE / longest).min(native.max(1.0));
+    let scale = (side / longest).min(full);
     let pix = figcraft_render::render_area_at(doc, &[id], bounds, scale, 0.0)?;
     let (width, height) = (pix.width() as usize, pix.height() as usize);
     // The renderer's pixels are premultiplied; the tracer reads plain colours.
@@ -367,9 +377,8 @@ fn source(doc: &Document, id: NodeId, colors: usize, detail: f64) -> Option<crat
             [plain(c[0]), plain(c[1]), plain(c[2]), c[3]]
         })
         .collect();
-    let speckle = 2 + ((1.0 - detail).powi(2) * (width * height) as f64 * 0.0004) as usize;
-    let options = TraceOptions { colors, speckle, tolerance: 0.4 + (1.0 - detail) * 1.6 };
-    Some(crate::vectorize::Source { node: id, bounds, scale, rgba, width, height, options })
+    let options = settings.options(width * height, scale / full.max(1e-9));
+    Some(crate::vectorize::Source { node: id, bounds, scale, rgba, width, height, options, original: settings.original })
 }
 
 /// Put traced layers in: each as a group of vectors just above its layer, which is hidden (one
@@ -420,8 +429,16 @@ fn put_one(doc: &mut Document, t: &crate::vectorize::Traced) -> Option<(NodeId, 
         made += 1;
     }
     let _ = doc.fit_to_children(gid);
-    if let Ok(n) = doc.get_mut(t.node) {
-        n.visible = false;
+    match t.original {
+        crate::vectorize::Original::Hide => {
+            if let Ok(n) = doc.get_mut(t.node) {
+                n.visible = false;
+            }
+        }
+        crate::vectorize::Original::Remove => {
+            let _ = doc.remove(t.node);
+        }
+        crate::vectorize::Original::Keep => {}
     }
     Some((gid, made))
 }
@@ -500,4 +517,25 @@ fn apply_cuts(s: &mut Session, cuts: Vec<crate::cutout::Cut>) -> Result<Value> {
     let state = json!({"state": "removed", "changed": changed});
     s.request_ui(cmd, state.clone());
     Ok(state)
+}
+
+fn vectorize_preview(s: &mut Session, p: &Value) -> Result<Value> {
+    use base64::Engine as _;
+    let cmd = "image.vectorizePreview";
+    let settings = crate::vectorize::Settings::from_params(cmd, p)?;
+    let ids = req_targets(cmd, s, p)?;
+    let doc = s.doc()?;
+    let Some(id) = ids.iter().copied().find(|id| doc.node(*id).and_then(top_image_fill).is_some()) else {
+        return Err(EngineError::Disabled(cmd.into(), "select a layer with an image fill".into()));
+    };
+    let preview = crate::vectorize::preview(doc, id, &settings).ok_or_else(|| bad(cmd, "the image couldn't be traced"))?;
+    let png = figcraft_render::encode_png(&preview.image).map_err(|e| bad(cmd, e))?;
+    let out = json!({
+        "png": base64::engine::general_purpose::STANDARD.encode(png),
+        "width": preview.image.width(),
+        "height": preview.image.height(),
+        "shapes": preview.shapes,
+    });
+    s.request_ui("dialog.vectorize", json!({"ids": ids}));
+    Ok(out)
 }
