@@ -185,3 +185,73 @@ fn the_apps_account_commands_sign_in_share_and_open() {
     drop((ada, dee));
     server.stop();
 }
+
+/// Version history on the server, through the app's commands: a version saved by name says who
+/// saved it and who edited since; a designer views and restores it for everyone in the file; and
+/// when everyone has left, the server keeps a checkpoint naming who changed the file since.
+#[test]
+fn the_servers_version_history_says_who_edited_and_restores_for_everyone() {
+    use serde_json::json;
+    let dir = TempDir::new("account-history");
+    let mut server = crate::start(&config(dir.path())).unwrap();
+    let url = format!("ws://{}/", server.addr());
+    let endpoint = Endpoint::plain(server.addr().to_string());
+    let invite = |admin: bool| {
+        let made = manage::request(&endpoint, &key(dir.path()), vec![Admin::CreateInvite { admin }], &NetLimits::default(), Duration::from_secs(5));
+        let AdminReply::Invite { code, .. } = made.unwrap().remove(0) else { panic!() };
+        code
+    };
+    let account = |name: &str, admin: bool| {
+        let mut s = crate::test_util::session(name);
+        let email = format!("{}@example.com", name.to_lowercase());
+        s.execute("account.join", &json!({"server": url, "code": invite(admin), "email": email, "name": name, "password": "a long password"}))
+            .unwrap();
+        s
+    };
+    let mut ada = account("Ada", true);
+    let mut dee = account("Dee", false);
+    ada.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap();
+    let file = ada.execute("account.publish", &json!({"server": url, "name": "Brand"})).unwrap()["file"].as_str().unwrap().to_string();
+    ada.execute("account.share", &json!({"server": url, "file": file, "email": "dee@example.com", "access": "edit"})).unwrap();
+    dee.execute("account.open", &json!({"server": url, "file": file})).unwrap();
+    pump(&mut [&mut ada, &mut dee], "both in", |s| live(s[0]) && live(s[1]) && !s[0].live().peers.is_empty());
+    let layers = |s: &figcraft_engine::Session| s.doc().unwrap().node(s.page().unwrap()).unwrap().children.len();
+    // Both edit, then Ada saves a version (the open tab's file: no `file` needed).
+    dee.execute("shape.ellipse", &json!({"x": 100, "y": 0, "width": 40, "height": 40})).unwrap();
+    pump(&mut [&mut ada, &mut dee], "Dee's ellipse", |s| layers(s[0]) == 2);
+    ada.execute("shape.rectangle", &json!({"x": 0, "y": 100, "width": 20, "height": 20})).unwrap();
+    pump(&mut [&mut ada, &mut dee], "Ada's rectangle", |s| layers(s[1]) == 3);
+    let saved = ada.execute("account.saveVersion", &json!({"name": "Review"})).unwrap();
+    let v = &saved["versions"][0];
+    assert_eq!((v["name"].as_str(), v["by"].as_str(), v["auto"].as_bool()), (Some("Review"), Some("Ada"), Some(false)), "{saved}");
+    let editors: Vec<&str> = v["editors"].as_array().unwrap().iter().filter_map(|e| e.as_str()).collect();
+    assert!(editors.contains(&"Ada") && editors.contains(&"Dee"), "{saved}");
+    let id = v["id"].as_str().unwrap().to_string();
+    // Dee changes more, looks at the version, and restores it: Ada sees it too.
+    dee.execute("shape.rectangle", &json!({"x": 200, "y": 0, "width": 20, "height": 20})).unwrap();
+    pump(&mut [&mut ada, &mut dee], "Dee's second layer", |s| layers(s[0]) == 4);
+    assert_eq!(dee.execute("account.versions", &json!({})).unwrap()["versions"].as_array().unwrap().len(), 1);
+    dee.execute("account.previewVersion", &json!({"id": id})).unwrap();
+    assert!(dee.ds().unwrap().preview.is_some());
+    dee.execute("account.restoreVersion", &json!({"id": id})).unwrap();
+    assert!(dee.ds().unwrap().preview.is_none());
+    assert_eq!(layers(&dee), 3);
+    pump(&mut [&mut ada, &mut dee], "the restore reaching Ada", |s| layers(s[0]) == 3);
+    // Only the owner or an admin deletes versions.
+    assert!(dee.execute("account.deleteVersion", &json!({"id": id})).is_err());
+    // Everyone leaves: the server keeps a checkpoint of what changed since, naming who.
+    drop((ada, dee));
+    let admin = AccountAuth::Password { email: "ada@example.com".into(), password: "a long password".into() };
+    let start = std::time::Instant::now();
+    let history = loop {
+        let reply = ask(&endpoint, admin.clone(), vec![AccountReq::Versions { file: file.clone() }]).unwrap().1.remove(0);
+        let AccountReply::Versions(list) = reply else { panic!("{reply:?}") };
+        if list.len() == 2 || start.elapsed() > Duration::from_secs(20) {
+            break list;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(history.len(), 2, "{history:?}");
+    assert!(history[0].auto && history[0].editors == vec!["Dee".to_string()], "{history:?}");
+    server.stop();
+}

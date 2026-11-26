@@ -8,7 +8,7 @@
 //! its requests through the app's link ([`NetRequest::Account`]) and keep what it says.
 
 use figcraft_collab::Replica;
-use figcraft_collab::message::{ACCOUNT_TOKEN, Access, AccountAuth, AccountFile, AccountReply, AccountReq, AccountUser, Member};
+use figcraft_collab::message::{ACCOUNT_TOKEN, Access, AccountAuth, AccountFile, AccountReply, AccountReq, AccountUser, Member, VersionInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -247,6 +247,103 @@ fn set_user(s: &mut Session, p: &Value) -> Result<Value> {
     as_me(s, CMD, p, vec![AccountReq::SetUser { id, admin, disabled }]).map(|_| json!({"done": true}))
 }
 
+/// What a version preview of the server's history is called (its id follows): the version panel
+/// restores it with `account.restoreVersion`, not from the file's own history.
+pub const SERVER_VERSION: &str = "server:";
+
+/// The server and file the active tab was opened from with an account, if it was.
+pub fn active_file(s: &Session) -> Option<(String, String)> {
+    let info = s.live().info.as_ref()?;
+    let query = info.link.split_once('?')?.1;
+    let field = |key: &str| query.split('&').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('=')).map(str::to_string);
+    field("token").filter(|t| t.starts_with(ACCOUNT_TOKEN))?;
+    // The session's own address is the server's (the link may name its host only).
+    Some((crate::online::plain_server(&info.url), field("file")?))
+}
+
+/// The file a history command means: its `server` and `file`, else the active tab's.
+fn history_of(s: &Session, cmd: &str, p: &Value) -> Result<(Value, String)> {
+    if let Some(file) = string(p, "file") {
+        return Ok((json!({"server": server_of(s, cmd, p)?}), file.trim().to_string()));
+    }
+    let (server, file) =
+        active_file(s).ok_or_else(|| bad(cmd, "open a file from your team's server (account.open), or give its `server` and `file`"))?;
+    Ok((json!({"server": server}), file))
+}
+
+fn version_json(v: &VersionInfo) -> Value {
+    json!({"id": v.id, "name": v.name, "description": v.description, "time": v.time, "auto": v.auto, "by": v.by, "editors": v.editors})
+}
+
+fn history_json(server: &Value, file: &str, replies: &[AccountReply]) -> Result<Value> {
+    let Some(AccountReply::Versions(list)) = replies.last() else { return Err(EngineError::Other("the server answered something else".into())) };
+    Ok(json!({"server": server["server"], "file": file, "versions": list.iter().map(version_json).collect::<Vec<_>>()}))
+}
+
+fn versions(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "account.versions";
+    let (server, file) = history_of(s, CMD, p)?;
+    let (_, replies) = as_me(s, CMD, &server, vec![AccountReq::Versions { file: file.clone() }])?;
+    history_json(&server, &file, &replies)
+}
+
+fn save_server_version(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "account.saveVersion";
+    let (server, file) = history_of(s, CMD, p)?;
+    let name = string(p, "name").map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).ok_or_else(|| bad(CMD, "give the version a `name`"))?;
+    let description = string(p, "description").unwrap_or_default();
+    let req = AccountReq::SaveVersion { file: file.clone(), name, description };
+    let (_, replies) = as_me(s, CMD, &server, vec![req])?;
+    history_json(&server, &file, &replies)
+}
+
+fn change_server_version(s: &mut Session, cmd: &str, p: &Value, rename: bool) -> Result<Value> {
+    let (server, file) = history_of(s, cmd, p)?;
+    let id = req_string(cmd, p, "id")?;
+    let req = if rename {
+        let name = req_string(cmd, p, "name")?;
+        AccountReq::RenameVersion { file: file.clone(), id, name, description: string(p, "description").unwrap_or_default() }
+    } else {
+        AccountReq::DeleteVersion { file: file.clone(), id }
+    };
+    let (_, replies) = as_me(s, cmd, &server, vec![req])?;
+    history_json(&server, &file, &replies)
+}
+
+/// A version of the active tab's file from the server: what it says of it and its design.
+fn fetch_version(s: &mut Session, cmd: &str, p: &Value) -> Result<(VersionInfo, std::sync::Arc<crate::Document>)> {
+    let (server, file) = active_file(s).ok_or_else(|| bad(cmd, "open a file from your team's server first (account.open)"))?;
+    let id = req_string(cmd, p, "id")?;
+    let (_, mut replies) = as_me(s, cmd, &json!({"server": server}), vec![AccountReq::Version { file, id }])?;
+    let Some(AccountReply::Version { info, snapshot }) = replies.pop() else {
+        return Err(EngineError::Other("the server answered something else".into()));
+    };
+    let replica = Replica::from_snapshot(&snapshot).map_err(|e| EngineError::Other(format!("the version can't be read: {e}")))?;
+    Ok((info, std::sync::Arc::new(replica.document().clone())))
+}
+
+fn preview_server_version(s: &mut Session, p: &Value) -> Result<Value> {
+    let (info, doc) = fetch_version(s, "account.previewVersion", p)?;
+    let time = u64::try_from(info.time).unwrap_or(0);
+    s.ds_mut()?.start_preview(&format!("{SERVER_VERSION}{}", info.id), &info.name, time, doc);
+    Ok(version_json(&info))
+}
+
+fn restore_server_version(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "account.restoreVersion";
+    // Refused before anything is asked or kept.
+    if let Some(why) = s.live_read_only(s.ds()?.uid) {
+        return Err(EngineError::Disabled(CMD.into(), why.into()));
+    }
+    let (info, doc) = fetch_version(s, CMD, p)?;
+    let ds = s.ds_mut()?;
+    // Restoring never loses work: the design as it was goes into this computer's history first,
+    // and the server keeps it in its own as it would any edit.
+    crate::cmd::file::keep_in_history(ds);
+    crate::cmd::file::replace_design(ds, doc);
+    Ok(version_json(&info))
+}
+
 fn simple(s: &mut Session, cmd: &str, p: &Value, req: AccountReq) -> Result<Value> {
     as_me(s, cmd, p, vec![req]).map(|_| json!({"done": true}))
 }
@@ -364,6 +461,48 @@ pub fn specs() -> Vec<CommandSpec> {
             "{server?, id, admin? (bool), disabled? (bool)}  makes an account an admin or not, or disables it (its sessions end) or enables it again; not your own, and the server keeps one admin (admins)",
             false,
             set_user
+        ),
+        spec!(
+            "account.versions",
+            "Version history on the server",
+            "{server?, file? (default the open tab's file, when it came from your team's server)}  the file's history on the server, newest first: {server, file, versions: [{id, name, description, time (Unix seconds), auto (a checkpoint the server kept), by (who saved it), editors (who changed the file since the version before)}]}",
+            false,
+            versions
+        ),
+        spec!(
+            "account.saveVersion",
+            "Save a version on the server",
+            "{server?, file?, name, description?}  keeps the file as everyone sees it now in its history on the server, saved by you (you may edit it); returns the history like account.versions",
+            false,
+            save_server_version
+        ),
+        spec!(
+            "account.renameVersion",
+            "Rename a version on the server",
+            "{server?, file?, id, name, description?}  a checkpoint given a name is kept for good (its owner or an admin); returns the history",
+            false,
+            |s, p| change_server_version(s, "account.renameVersion", p, true)
+        ),
+        spec!(
+            "account.deleteVersion",
+            "Delete a version on the server",
+            "{server?, file?, id}  (its owner or an admin); returns the history",
+            false,
+            |s, p| change_server_version(s, "account.deleteVersion", p, false)
+        ),
+        spec!(
+            "account.previewVersion",
+            "View a version from the server",
+            "{id}  shows a version of the open tab's file from its history on the server in place of the design (read-only; account.restoreVersion keeps it, version.exitPreview goes back)",
+            false,
+            preview_server_version
+        ),
+        spec!(
+            "account.restoreVersion",
+            "Restore a version from the server",
+            "{id}  puts a version of the open tab's file from its history on the server in place of the design, for everyone in it (one undo step; comments stay; the design as it was is kept in this computer's history first)",
+            true,
+            restore_server_version
         ),
     ]
 }

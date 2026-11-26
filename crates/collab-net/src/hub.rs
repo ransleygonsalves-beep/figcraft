@@ -563,8 +563,8 @@ impl<B: Backend> Hub<B> {
     /// A request on an account connection, and what it does to others' connections.
     fn account(&mut self, conn: u64, ip: IpAddr, user: u64, session: &str, req: AccountReq) {
         let rooms = &self.rooms;
-        let open = |file: &str| rooms.get(file).map(Room::info);
-        let handled = self.backend.account(ip, user, session, req, &open);
+        let live = |file: &str| rooms.get(file).and_then(|r| r.server.replica().snapshot().ok());
+        let handled = self.backend.account(ip, user, session, req, &live);
         self.answer(conn, &ServerMsg::Account(Box::new(handled.reply)));
         // Who joined a file with an account and may no longer, or may now do something else, is
         // told the session is over for them (they join again with what they may do now).

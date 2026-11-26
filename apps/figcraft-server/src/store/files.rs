@@ -129,6 +129,8 @@ impl Store {
             opened: 0,
             account_owner: None,
             members: std::collections::BTreeMap::new(),
+            editors: Vec::new(),
+            checkpoint: 0,
         };
         let dir = self.dir(&id);
         let written = fs::create_dir_all(&dir)

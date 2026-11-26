@@ -3,6 +3,11 @@
 //! version Restore, Rename, Duplicate and Delete. Clicking a version shows it on the canvas
 //! (read-only, with a banner to restore it or go back); clicking Current version goes back. Above
 //! the history, the file's branches: create one, open one, review and merge, archive.
+//!
+//! A file opened from your team's server shows its history there instead
+//! (`account.versions`): what the server kept by itself while people edited, and what people
+//! saved by name, each with who saved it and who edited since the one before. Viewing and
+//! restoring work the same; restoring changes the file for everyone in it.
 
 use egui::{Align2, CornerRadius, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_engine::branches::BranchState;
@@ -25,6 +30,15 @@ pub struct VersionUi {
     pub confirm_delete: Option<String>,
     /// Runs of autosaves shown unfolded (keyed by their newest version's id).
     pub open_groups: std::collections::BTreeSet<String>,
+    /// The history on the server of the file shown, when it came from your team's server.
+    team: Option<Team>,
+}
+
+/// A file's history on the server: which file (server, file id), and its versions once the
+/// server answered.
+struct Team {
+    file: (String, String),
+    rows: Option<Vec<Row>>,
 }
 
 /// Title and description being written; `id` is the version being edited (`None` = a new one).
@@ -77,6 +91,7 @@ struct BranchRow {
 }
 
 /// One version as listed.
+#[derive(Clone)]
 struct Row {
     id: String,
     name: String,
@@ -137,18 +152,32 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
         widgets::separator(ui);
     }
 
-    let rows: Vec<Row> = app
-        .session
-        .ds()
-        .map(|ds| {
-            ds.versions
-                .iter()
-                .rev()
-                .map(|v| Row { id: v.id.clone(), name: v.name.clone(), description: v.description.clone(), time: v.time, auto: v.auto })
-                .collect()
-        })
-        .unwrap_or_default();
+    let team = figcraft_engine::accounts::active_file(&app.session);
+    if let Some(file) = team.clone().filter(|f| app.ui.versions.team.as_ref().is_none_or(|t| &t.file != f)) {
+        app.ui.versions.team = Some(Team { file, rows: None });
+        refresh_team(app, ui.ctx());
+    }
+    let loading = team.is_some() && app.ui.versions.team.as_ref().is_some_and(|t| t.rows.is_none());
+    let rows: Vec<Row> = match &team {
+        Some(_) => app.ui.versions.team.as_ref().and_then(|t| t.rows.clone()).unwrap_or_default(),
+        None => app
+            .session
+            .ds()
+            .map(|ds| {
+                ds.versions
+                    .iter()
+                    .rev()
+                    .map(|v| Row { id: v.id.clone(), name: v.name.clone(), description: v.description.clone(), time: v.time, auto: v.auto })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
     let previewing = app.session.ds().ok().and_then(|ds| ds.preview.as_ref().map(|p| p.id.clone()));
+    // A version from the server is previewed under its id with a prefix.
+    let previewing = match (&team, previewing) {
+        (Some(_), Some(p)) => p.strip_prefix(figcraft_engine::accounts::SERVER_VERSION).map(str::to_string),
+        (_, p) => p,
+    };
     // The branches of the file shown, or of the file a branch tab belongs to.
     let branches: Vec<BranchRow> = app
         .session
@@ -211,7 +240,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
             } else if let Some(f) = app.ui.versions.form.as_mut().filter(|f| f.id.as_deref() == Some(row.id.as_str())) {
                 inline_row(ui, i == last, |ui| form(ui, f, tr("Save"), TEXT_X))
             } else {
-                version_row(ui, row, i == last, previewing.as_deref() == Some(row.id.as_str()))
+                version_row(ui, row, i == last, previewing.as_deref() == Some(row.id.as_str()), team.is_some())
             };
             if a.is_some() {
                 action = a;
@@ -219,23 +248,90 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
             i += 1;
         }
         if rows.is_empty() {
+            let empty = if loading {
+                tr("Asking the server…")
+            } else if team.is_some() {
+                tr("No versions on the server yet. It keeps one by itself while people edit, and you can save one by name.")
+            } else {
+                tr("No saved versions yet. Save a version to mark a point in your work you can come back to.")
+            };
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_space(16.0);
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(tr("No saved versions yet. Save a version to mark a point in your work you can come back to."))
-                            .font(regular(11.0))
-                            .color(t.text_secondary),
-                    )
-                    .wrap(),
-                );
+                ui.add(egui::Label::new(egui::RichText::new(empty).font(regular(11.0)).color(t.text_secondary)).wrap());
             });
         }
         ui.add_space(16.0);
     });
     if let Some(a) = action {
-        act(app, a, &rows);
+        let ctx = ui.ctx().clone();
+        match team {
+            Some(_) => act_team(app, &ctx, a, &rows),
+            None => act(app, a, &rows),
+        }
+    }
+}
+
+/// Ask the server for the history of the file shown again.
+fn refresh_team(app: &mut FigApp, ctx: &egui::Context) {
+    app.run_background(ctx, "account.versions", json!({}), Box::new(|app, _, v| keep_team(app, &v)));
+}
+
+/// Keep the history a server command returned (`account.versions` and those that change it).
+fn keep_team(app: &mut FigApp, v: &serde_json::Value) {
+    let Some(t) = app.ui.versions.team.as_mut() else { return };
+    if v["file"].as_str() != Some(t.file.1.as_str()) {
+        return;
+    }
+    let row = |v: &serde_json::Value| {
+        let text = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+        let mut about = Vec::new();
+        if !text("by").is_empty() {
+            about.push(trf("Saved by {name}", &[("name", &text("by"))]));
+        }
+        let editors: Vec<&str> = v["editors"].as_array().map(|a| a.iter().filter_map(|e| e.as_str()).collect()).unwrap_or_default();
+        if !editors.is_empty() {
+            about.push(trf("Edited by {names}", &[("names", &editors.join(", "))]));
+        }
+        let description = [text("description"), about.join(" · ")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n");
+        Row { id: text("id"), name: text("name"), description, time: v["time"].as_u64().unwrap_or(0), auto: v["auto"].as_bool().unwrap_or(false) }
+    };
+    t.rows = Some(v["versions"].as_array().map(|a| a.iter().map(row).collect()).unwrap_or_default());
+}
+
+/// What the panel does for a file from your team's server: the same, through its history there.
+fn act_team(app: &mut FigApp, ctx: &egui::Context, a: Action, rows: &[Row]) {
+    let name_of = |id: &str| rows.iter().find(|r| r.id == id).map(|r| r.name.clone()).unwrap_or_default();
+    let kept: crate::Done = Box::new(|app, _, v| keep_team(app, &v));
+    match a {
+        Action::Preview(id) => app.run_background(ctx, "account.previewVersion", json!({"id": id}), Box::new(|_, _, _| {})),
+        Action::Restore(id) => {
+            let name = name_of(&id);
+            app.run_background(
+                ctx,
+                "account.restoreVersion",
+                json!({"id": id}),
+                Box::new(move |app, _, _| app.toast(trf("Restored “{name}”", &[("name", &name)]))),
+            );
+        }
+        Action::Submit => {
+            let st = &mut app.ui.versions;
+            let Some(f) = st.form.take_if(|f| !f.branch) else { return act(app, Action::Submit, rows) };
+            let (cmd, params) = match &f.id {
+                Some(id) => ("account.renameVersion", json!({"id": id, "name": f.name.trim(), "description": f.description.trim()})),
+                None => ("account.saveVersion", json!({"name": f.name.trim(), "description": f.description.trim()})),
+            };
+            app.run_background(ctx, cmd, params, kept);
+        }
+        Action::Delete(id) => {
+            app.ui.versions.confirm_delete = None;
+            app.run_background(ctx, "account.deleteVersion", json!({"id": id}), kept);
+        }
+        Action::Close => {
+            act(app, Action::Close, rows);
+        }
+        // Branches, forms and folding are the panel's own.
+        a => act(app, a, rows),
     }
 }
 
@@ -405,7 +501,7 @@ fn current_row(ui: &mut Ui, more: bool, active: bool) -> bool {
 
 /// Draw one version row with timeline, name, time, up to three description lines and a
 /// more/context menu; returns the chosen preview, restore, edit, duplicate or delete action.
-fn version_row(ui: &mut Ui, row: &Row, last: bool, previewing: bool) -> Option<Action> {
+fn version_row(ui: &mut Ui, row: &Row, last: bool, previewing: bool, team: bool) -> Option<Action> {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let text_w = (w - TEXT_X - 36.0).max(40.0);
@@ -445,12 +541,14 @@ fn version_row(ui: &mut Ui, row: &Row, last: bool, previewing: bool) -> Option<A
     }
     let more = more.tip(tr("More"));
     let mut menu = |ui: &mut Ui| {
-        for (label, a) in [
+        let items = [
             (tr("Restore this version"), Action::Restore(row.id.clone())),
             (tr("Rename"), Action::Edit(row.id.clone())),
             (tr("Duplicate"), Action::Duplicate(row.id.clone())),
             (tr("Delete"), Action::AskDelete(row.id.clone())),
-        ] {
+        ];
+        // A version on the server opens as a copy by viewing it, then File ▸ Duplicate.
+        for (label, a) in items.into_iter().filter(|(_, a)| !(team && matches!(a, Action::Duplicate(_)))) {
             if crate::right::menu_item(ui, label, "") {
                 out = Some(a);
                 ui.close();
@@ -542,7 +640,14 @@ pub fn preview_banner(app: &mut FigApp, ctx: &egui::Context, canvas: Rect) {
     });
     match action {
         Some(true) => {
-            if app.run("version.restore", json!({"id": id})).is_some() {
+            if let Some(server_id) = id.strip_prefix(figcraft_engine::accounts::SERVER_VERSION) {
+                app.run_background(
+                    ctx,
+                    "account.restoreVersion",
+                    json!({"id": server_id}),
+                    Box::new(move |app, _, _| app.toast(trf("Restored “{name}”", &[("name", &name)]))),
+                );
+            } else if app.run("version.restore", json!({"id": id})).is_some() {
                 app.toast(trf("Restored “{name}”", &[("name", &name)]));
             }
         }
@@ -619,7 +724,7 @@ mod icon_size_tests {
         let over = Some(pos2(20.0, 20.0));
         let row = Row { id: "v".into(), name: "Draft".into(), description: String::new(), time: 0, auto: false };
         let version = painted_rects(over, |ui| {
-            version_row(ui, &row, true, false);
+            version_row(ui, &row, true, false, false);
         });
         assert!(paints_icon_at_button_size(&version, Icon::Dots), "version row menu is not 16 pt");
         let branch = BranchRow { id: "b".into(), name: "Try".into(), time: 0, state: BranchState::Active };
