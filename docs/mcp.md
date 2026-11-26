@@ -295,10 +295,14 @@ Or in a project's `.mcp.json`:
   `image.crop {ids?, index?}` (one layer) switches its top visible image fill (or fill `index`) to
   Crop, keeping the picture where it was, and returns `{id, index}`; the app also enters crop mode
   on the canvas. The crop itself is the paint's `crop` transform (`fill.set`).
-  `image.vectorize {ids?, colors? (2–64, default 16), detail? (0–1, default 0.5)}` traces each
-  layer with an image fill as it shows into filled vectors, one per colour, stacked largest first
-  in a group just above it, and hides the layer; pixels more than half transparent are left out.
-  Higher `detail` keeps smaller shapes and follows edges more closely. Returns `{ids, shapes}`.
+  `image.vectorize {ids?, colors? (2–64, default 16), detail? (0–1, default 0.5), wait?, cancel?}`
+  traces each layer with an image fill as it shows into filled vectors, one per colour, stacked
+  largest first in a group just above it, and hides the layer; pixels more than half transparent
+  are left out. Higher `detail` keeps smaller shapes and follows edges more closely. The tracing
+  runs on its own thread: the first call returns `{state: working, done, images}` (`done` 0–1);
+  call again (ids optional) for progress, and once done the next call in the same file puts the
+  shapes in as one undo step and returns `{state: vectorized, ids, shapes}`. `cancel: true` stops
+  it (the next call returns `{state: cancelled}`); `wait: true` returns the shapes in one call.
   `image.removeBackground {ids?}` (desktop only) makes everything but the subject of each layer's
   top image fill transparent, with a local model (BiRefNet, MIT, 214 MiB, downloaded once). It
   runs on its own thread: the first call returns `{state: downloading|loading|working, done,

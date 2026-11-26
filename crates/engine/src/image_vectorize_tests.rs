@@ -1,5 +1,6 @@
-//! `image.vectorize` (Object ▸ Vectorize image): an image layer traced into a group of filled
-//! vectors over it, the layer hidden, as one undo step; layers without an image fill are refused.
+//! `image.vectorize` (Object ▸ Vectorize image, #2497): an image layer traced into a group of
+//! filled vectors over it, the layer hidden, as one undo step; the tracing runs on its own thread,
+//! reports its progress and can be cancelled; layers without an image fill are refused.
 
 use base64::Engine as _;
 use figcraft_color::PaintKind;
@@ -29,7 +30,7 @@ fn disc_layer(s: &mut Session) -> NodeId {
 fn an_image_becomes_a_group_of_coloured_vectors_over_it() {
     let mut s = Session::new();
     let img = disc_layer(&mut s);
-    let r = ex(&mut s, "image.vectorize", json!({"ids": [img], "colors": 2}));
+    let r = ex(&mut s, "image.vectorize", json!({"ids": [img], "colors": 2, "wait": true}));
     let group = id_of(&r["ids"][0]).unwrap();
     let doc = s.doc().unwrap();
     assert!(!doc.node(img).unwrap().visible, "the image is hidden, not removed");
@@ -67,4 +68,41 @@ fn a_layer_without_an_image_is_refused() {
     let rect = id_of(&ex(&mut s, "node.create", json!({"type": "rectangle", "width": 50, "height": 50}))["id"]).unwrap();
     let e = s.execute("image.vectorize", &json!({"ids": [rect]})).unwrap_err();
     assert!(e.to_string().contains("image fill"), "{e}");
+}
+
+/// One test, as the job is the process's: a real job runs to the end and goes in, then a running
+/// job is cancelled.
+#[test]
+fn the_tracing_runs_on_its_own_thread_and_can_be_cancelled() {
+    use crate::vectorize::{self, Job};
+    let mut s = Session::new();
+    let img = disc_layer(&mut s);
+    let started = ex(&mut s, "image.vectorize", json!({"ids": [img], "colors": 2}));
+    assert_eq!(started["state"], "working", "{started}");
+    assert!(s.doc().unwrap().node(img).unwrap().visible, "nothing changes while it traces");
+    // Called again it reports progress, then, once done, puts the shapes in.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let done = loop {
+        let r = ex(&mut s, "image.vectorize", json!({}));
+        if r["state"] == "vectorized" {
+            break r;
+        }
+        assert_eq!(r["state"], "working", "{r}");
+        assert!(std::time::Instant::now() < deadline, "the job never finished");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let group = id_of(&done["ids"][0]).unwrap();
+    assert_eq!(done["shapes"], 2);
+    assert!(!s.doc().unwrap().node(img).unwrap().visible);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.doc().unwrap().node(group).is_none() && s.doc().unwrap().node(img).unwrap().visible, "one undo step");
+
+    // Cancel: a running job is asked to stop, and the call after it ends says so.
+    assert!(s.execute("image.vectorize", &json!({"cancel": true})).is_err(), "nothing to cancel");
+    let uid = s.ds().unwrap().uid;
+    vectorize::set(Job::Running { doc: uid, done: 0.3, images: 1 });
+    assert_eq!(ex(&mut s, "image.vectorize", json!({"cancel": true}))["state"], "cancelling");
+    vectorize::set(Job::Cancelled { doc: uid });
+    assert_eq!(ex(&mut s, "image.vectorize", json!({}))["state"], "cancelled");
+    assert!(vectorize::status().is_none(), "the job is gone");
 }

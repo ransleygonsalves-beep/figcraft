@@ -111,6 +111,7 @@ impl FigApp {
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
         state["fontDownload"] = json!(self.ui.font_download.as_ref().map(crate::font_download::Pending::inspect));
         state["removeBackground"] = json!(self.ui.remove_background.as_ref().map(crate::remove_background::Shown::inspect));
+        state["vectorizing"] = json!(self.ui.vectorizing.as_ref().map(crate::vectorize_progress::Shown::inspect));
         state["presentTabs"] = tabs::present_tabs_inspect(self);
         state["frameTimes"] = self.frame_stats.times();
         state
