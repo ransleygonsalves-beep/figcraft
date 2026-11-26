@@ -5,7 +5,7 @@ use figcraft_geom::kurbo::{Point, Shape};
 
 use crate::trace::{MAX_PIXELS, TraceOptions, TraceStop, trace, trace_with};
 
-const OPT: TraceOptions = TraceOptions { colors: 8, speckle: 4, tolerance: 1.0 };
+const OPT: TraceOptions = TraceOptions { colors: 8, speckle: 4, tolerance: 1.0, mono: None };
 
 /// A `w` × `h` image painted by `at(x, y)` (RGBA).
 fn image(w: usize, h: usize, at: impl Fn(usize, usize) -> [u8; 4]) -> Vec<u8> {
@@ -109,4 +109,30 @@ fn progress_rises_to_the_end_and_cancelling_stops_it() {
     });
     assert_eq!(stopped.err(), Some(TraceStop::Cancelled));
     assert_eq!(calls, 3, "stops at the first no");
+}
+
+#[test]
+fn one_colour_keeps_the_dark_pixels_as_one_shape() {
+    // A dark ring and a light-grey square on white: at half the lightness only the ring is dark.
+    let img = image(60, 40, |x, y| {
+        if inside(x, y, 5, 5, 25, 25) && !inside(x, y, 10, 10, 20, 20) {
+            [20, 20, 30, 255]
+        } else if inside(x, y, 35, 10, 50, 25) {
+            [200, 200, 200, 255]
+        } else {
+            WHITE
+        }
+    });
+    let layers = trace(&img, 60, 40, &TraceOptions { mono: Some(0.5), ..OPT }).unwrap();
+    assert_eq!(layers.len(), 1, "one shape");
+    assert_eq!(layers[0].color, [20, 20, 30], "in the dark pixels' colour");
+    let path = &layers[0].path;
+    assert!(path.winding(Point::new(7.0, 15.0)) != 0, "the ring is in it");
+    assert_eq!(path.winding(Point::new(15.0, 15.0)), 0, "its hole isn't");
+    assert_eq!(path.winding(Point::new(42.0, 17.0)), 0, "the light square isn't");
+    // Lighter than the threshold everywhere: nothing.
+    assert!(trace(&img, 60, 40, &TraceOptions { mono: Some(0.05), ..OPT }).unwrap().is_empty());
+    // A higher threshold takes the grey square too.
+    let both = trace(&img, 60, 40, &TraceOptions { mono: Some(0.9), ..OPT }).unwrap();
+    assert!(both[0].path.winding(Point::new(42.0, 17.0)) != 0);
 }

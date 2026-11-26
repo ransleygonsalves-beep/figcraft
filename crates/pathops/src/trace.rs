@@ -33,6 +33,9 @@ pub struct TraceOptions {
     pub speckle: usize,
     /// How far (pixels) an outline may stray from the pixels' edges as it is smoothed.
     pub tolerance: f64,
+    /// One colour (logos, line art): the opaque pixels darker than this share of white (0–1)
+    /// make one shape, in their average colour, and `colors` is ignored. `None`: in colour.
+    pub mono: Option<f32>,
 }
 
 /// One traced colour: the shape it fills (pixel units, y down) in that colour.
@@ -83,18 +86,30 @@ pub fn trace_with(
     }
     let pixel = |i: usize| [rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]];
     let opaque = |i: usize| rgba[i * 4 + 3] >= 128;
-    let centres = palette(n, &pixel, &opaque, opt.colors.clamp(2, MAX_COLORS));
-    if centres.is_empty() {
-        return Ok(Vec::new());
-    }
     // The colours take about a fifth of the time, the outlines the rest.
     let go = |progress: &mut dyn FnMut(f32) -> bool, f: f32| if progress(f) { Ok(()) } else { Err(TraceStop::Cancelled) };
-    go(progress, 0.1)?;
-    let mut labels: Vec<u16> = (0..n).map(|i| if opaque(i) { nearest(&centres, pixel(i)) } else { CLEAR }).collect();
+    let (mut labels, colours) = match opt.mono {
+        Some(threshold) => {
+            // Perceived lightness (Rec. 709 weights) against the threshold.
+            let dark =
+                |p: [u8; 3]| 0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2]) < threshold.clamp(0.0, 1.0) * 255.0;
+            let labels: Vec<u16> = (0..n).map(|i| if opaque(i) && dark(pixel(i)) { 0 } else { CLEAR }).collect();
+            (labels, 1)
+        }
+        None => {
+            let centres = palette(n, &pixel, &opaque, opt.colors.clamp(2, MAX_COLORS));
+            go(progress, 0.1)?;
+            let labels: Vec<u16> = (0..n).map(|i| if opaque(i) { nearest(&centres, pixel(i)) } else { CLEAR }).collect();
+            (labels, centres.len())
+        }
+    };
+    if colours == 0 || labels.iter().all(|l| *l == CLEAR) {
+        return Ok(Vec::new());
+    }
     merge_speckles(&mut labels, width, height, opt.speckle.max(1));
     go(progress, 0.2)?;
     // Each colour's own average (the pixels it ended up with), and how many it has.
-    let mut sums = vec![([0u64; 3], 0usize); centres.len()];
+    let mut sums = vec![([0u64; 3], 0usize); colours];
     for (i, l) in labels.iter().enumerate() {
         if let Some((sum, count)) = sums.get_mut(usize::from(*l)) {
             let p = pixel(i);
@@ -104,10 +119,10 @@ pub fn trace_with(
             *count += 1;
         }
     }
-    let mut order: Vec<usize> = (0..centres.len()).filter(|l| sums[*l].1 > 0).collect();
+    let mut order: Vec<usize> = (0..colours).filter(|l| sums[*l].1 > 0).collect();
     order.sort_by_key(|l| std::cmp::Reverse(sums[*l].1));
     // A colour's place in the stack (0 at the bottom).
-    let mut rank = vec![usize::MAX; centres.len()];
+    let mut rank = vec![usize::MAX; colours];
     for (r, l) in order.iter().enumerate() {
         rank[*l] = r;
     }

@@ -241,6 +241,7 @@ impl FigApp {
                 "selectArea" => self.start_key_box(),
                 "image.removeBackground" => crate::remove_background::request(self, &r.data),
                 "image.vectorize" => crate::vectorize_progress::request(self, &r.data),
+                "dialog.vectorize" => crate::vectorize_options::request(self, &r.data),
                 "image.crop" => {
                     // Crop mode takes the canvas: an open colour picker would edit the same paint.
                     self.ui.picker = None;

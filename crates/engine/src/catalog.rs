@@ -157,8 +157,8 @@ pub static MENU: &[MenuItem] = &[
     m!("Object", "Set as thumbnail", "object.setThumbnail"),
     // FigCraft's own (in `OWN`): the way into crop mode that the Design panel also offers.
     m!("Object", "Crop image", "image.crop"),
-    // FigCraft's own (in `OWN`): an image traced into filled vector shapes.
-    m!("Object", "Vectorize image", "image.vectorize"),
+    // FigCraft's own (in `OWN`): an image traced into filled vector shapes, after its options.
+    m!("Object", "Vectorize image…", "image.vectorizePreview"),
     // FigCraft's own (in `OWN`): a local model makes an image's background transparent.
     m!("Object", "Remove background", "image.removeBackground"),
     m!("Object", SEP, ""),
@@ -312,7 +312,7 @@ const OWN: [&str; 8] = [
     "help.gettingStarted",
     "text.missingFonts",
     "image.crop",
-    "image.vectorize",
+    "image.vectorizePreview",
     "image.removeBackground",
     "text.directionAuto",
 ];
