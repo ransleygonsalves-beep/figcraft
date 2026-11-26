@@ -1,5 +1,11 @@
 # Designer builds for the ransleygonsalves-beep/figcraft fork: unsigned Windows and macOS
-# installers on GitHub's standard runners, put in a DRAFT release for the owner to publish.
+# installers, the macOS figcraft-cli, the browser build and the Linux server, on GitHub's standard
+# runners, put in a DRAFT release for the owner to publish.
+#
+# Every client is built for the team's own server: set the repository variable
+# FIGCRAFT_DEFAULT_SERVER (Settings > Secrets and variables > Actions > Variables) to its address,
+# wss://host/. Left unset, the builds have no default server (online sharing waits for one in
+# Preferences); they never default to the public wss://collab.craftapps.dev/.
 #
 # The official release.yml needs signing secrets and a paid macOS runner, so this fork uses this
 # workflow instead. Start it by pushing a tag that matches the version in Cargo.toml:
@@ -27,6 +33,10 @@ concurrency:
 env:
   # The fonts the official builds embed (the same pin as release.yml).
   CRAFT_FONTS_REF: 37827adc41fd165f9a9234ac40f94dbad353aa69
+  # The team's server, compiled into every client (see the top of this file).
+  FIGCRAFT_DEFAULT_SERVER: ${{ vars.FIGCRAFT_DEFAULT_SERVER }}
+  # Trunk builds the browser version (packaging/web/package.sh).
+  TRUNK_VERSION: v0.22.1
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
@@ -53,6 +63,14 @@ jobs:
             exit 1
           fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
+      - name: Say which server the clients default to
+        shell: bash
+        run: |
+          case "$FIGCRAFT_DEFAULT_SERVER" in
+            wss://*) echo "Clients default to $FIGCRAFT_DEFAULT_SERVER" ;;
+            "") echo "::warning::FIGCRAFT_DEFAULT_SERVER isn't set: the clients have no default server" ;;
+            *) echo "::error::FIGCRAFT_DEFAULT_SERVER must be a wss:// address"; exit 1 ;;
+          esac
 
   windows:
     needs: version
@@ -110,11 +128,68 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos
-          path: dist/release/figcraft-*-macos-universal.dmg
+          path: |
+            dist/release/figcraft-*-macos-universal.dmg
+            dist/release/figcraft-cli-*-macos-universal.zip
+          if-no-files-found: error
+
+  web:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: ${{ env.CRAFT_FONTS_REF }}
+      - name: Install Rust for WebAssembly and Trunk
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+          base="https://github.com/trunk-rs/trunk/releases/download/$TRUNK_VERSION"
+          curl -fsSL -o trunk.tar.gz "$base/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o trunk.sha256 "$base/trunk-x86_64-unknown-linux-gnu.tar.gz.sha256"
+          echo "$(awk '{print $1}' trunk.sha256)  trunk.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin" && tar -xzf trunk.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/trunk" --version
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+      - name: Build the browser version
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: bash packaging/web/package.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web
+          path: dist/release/figcraft-web-*.zip
+          if-no-files-found: error
+
+  server:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build the server for Linux
+        run: bash packaging/server/package.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server
+          path: dist/release/figcraft-server-*-linux-x86_64.tar.gz
           if-no-files-found: error
 
   draft:
-    needs: [version, windows, macos]
+    needs: [version, windows, macos, web, server]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -134,7 +209,14 @@ jobs:
           cd dist
           sha256sum figcraft-* > SHA256SUMS.txt
           cat > notes.md <<'NOTES'
-          A test build of FigCraft with Vectorize image, Remove background and the Smooth tool.
+          A test build of FigCraft with team accounts on your own server (in the app, the
+          browser and for Claude), version history with who edited what, Vectorize image,
+          Remove background and the Smooth tool.
+
+          **Files:** the Windows `.msi` and portable `.zip` (both with `figcraft-cli.exe`), the
+          Mac `.dmg` and `figcraft-cli-*-macos-universal.zip`, the browser build
+          `figcraft-web-*.zip`, and the server `figcraft-server-*-linux-x86_64.tar.gz`.
+          `SHA256SUMS.txt` lists every file's checksum.
 
           **Windows:** run the `.msi`, or unzip the `-portable.zip` and open `figcraft.exe`.
           Windows may say it protected your PC: choose **More info**, then **Run anyway**.
