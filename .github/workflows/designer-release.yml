@@ -1,0 +1,150 @@
+# Designer builds for the ransleygonsalves-beep/figcraft fork: unsigned Windows and macOS
+# installers on GitHub's standard runners, put in a DRAFT release for the owner to publish.
+#
+# The official release.yml needs signing secrets and a paid macOS runner, so this fork uses this
+# workflow instead. Start it by pushing a tag that matches the version in Cargo.toml:
+#
+#   cargo xtask version set 0.19.1 && git commit -am "Version 0.19.1"
+#   git tag v0.19.1 && git push origin designer v0.19.1
+#
+# or by hand from the Actions tab (Run workflow). The app's update check (crates/ui-egui/src/lib.rs,
+# UPDATE_APP) reads this fork's published releases; unsigned builds tell the user about a new
+# version and they install it themselves.
+name: Designer release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: designer-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The fonts the official builds embed (the same pin as release.yml).
+  CRAFT_FONTS_REF: 37827adc41fd165f9a9234ac40f94dbad353aa69
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: v
+        name: Read the version and check it matches the tag
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(awk '/^\[/ { p = ($0 == "[workspace.package]"); next } p && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }' Cargo.toml)
+          if [ -z "$version" ]; then echo "::error::no version in Cargo.toml"; exit 1; fi
+          if [ "$REF_TYPE" = "tag" ] && [ "$REF_NAME" != "v$version" ]; then
+            echo "::error::tag $REF_NAME doesn't match Cargo.toml's version $version; tag v$version instead"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: ${{ env.CRAFT_FONTS_REF }}
+      - name: Install Rust and WiX
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+      - name: Build the installer and the portable zip (unsigned)
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}\craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: pwsh packaging/windows/package.ps1 -Arch x64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: |
+            dist/release/figcraft-*-windows-x64.msi
+            dist/release/figcraft-*-windows-x64-portable.zip
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: ${{ env.CRAFT_FONTS_REF }}
+      - name: Install Rust for Apple Silicon and Intel
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build the disk image (ad-hoc signed, not notarized)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: bash packaging/macos/package.sh --arch universal
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos
+          path: dist/release/figcraft-*-macos-universal.dmg
+          if-no-files-found: error
+
+  draft:
+    needs: [version, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and a draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          cd dist
+          sha256sum figcraft-* > SHA256SUMS.txt
+          cat > notes.md <<'NOTES'
+          A test build of FigCraft with Vectorize image, Remove background and the Smooth tool.
+
+          **Windows:** run the `.msi`, or unzip the `-portable.zip` and open `figcraft.exe`.
+          Windows may say it protected your PC: choose **More info**, then **Run anyway**.
+
+          **Mac:** open the `.dmg` and drag FigCraft to Applications. The first time, open it
+          with a right-click on FigCraft in Applications, then **Open**, and **Open** again; on
+          macOS 15 and later go to System Settings ▸ Privacy & Security and choose **Open Anyway**.
+
+          FigCraft tells you when a newer build is out here; download and install it the same way.
+          NOTES
+          gh release create "v$VERSION" --repo "$REPO" --target "$SHA" --draft \
+            --title "FigCraft v$VERSION (designer build)" --notes-file notes.md \
+            figcraft-* SHA256SUMS.txt
