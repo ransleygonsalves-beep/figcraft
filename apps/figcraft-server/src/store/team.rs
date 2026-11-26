@@ -26,9 +26,15 @@ fn shared(entry: &Entry) -> bool {
 }
 
 impl Store {
+    /// What the team list lets people do, if it is on: never while the server lets people in with
+    /// their accounts only, so whoever reaches the server sees no file names.
+    pub(super) fn team_access(&self) -> Option<Access> {
+        self.cfg.hosting.team.filter(|_| !self.accounts_only())
+    }
+
     /// The files shared now, most recently changed first (at most [`MAX_TEAM`]).
     pub(super) fn team(&self, open: &dyn Fn(&str) -> Option<OpenFile>) -> AdminReply {
-        let Some(access) = self.cfg.hosting.team else { return AdminReply::Failed { reason: NO_TEAM.into() } };
+        let Some(access) = self.team_access() else { return AdminReply::Failed { reason: NO_TEAM.into() } };
         let mut files: Vec<TeamFile> =
             self.files.iter().filter(|(_, e)| shared(e)).map(|(id, e)| TeamFile { file: self.info(id, e, open(id)), access }).collect();
         files.sort_by(|a, b| b.file.updated.cmp(&a.file.updated).then_with(|| a.file.name.cmp(&b.file.name)));
@@ -40,7 +46,7 @@ impl Store {
     /// It replaces a team link made with another access before the operator changed the setting
     /// (that took a restart, so nobody is in the file with it).
     pub(super) fn team_link(&mut self, file: &str) -> Result<NewLink, String> {
-        let access = self.cfg.hosting.team.ok_or(NO_TEAM)?;
+        let access = self.team_access().ok_or(NO_TEAM)?;
         let max = self.cfg.max_links;
         let path = self.dir(file).join(LINKS);
         let entry = self.files.get_mut(file).filter(|e| shared(e)).ok_or(NOT_SHARED)?;
@@ -75,7 +81,10 @@ impl Store {
     /// next join makes a new one. One that can't be removed stays refused at the door, and the
     /// operator is told.
     pub(super) fn drop_stale_team_links(&mut self) {
-        let team = self.cfg.hosting.team;
+        if self.accounts_only() && self.cfg.hosting.team.is_some() {
+            log::warn!("team_files is ignored: with accounts_only, people see only the files shared with their accounts");
+        }
+        let team = self.team_access();
         let stale = |l: &super::Link| l.team.is_some() && team != Some(l.access);
         let files: Vec<String> = self.files.iter().filter(|(_, e)| e.links.iter().any(stale)).map(|(id, _)| id.clone()).collect();
         for file in files {

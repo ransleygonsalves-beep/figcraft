@@ -10,6 +10,9 @@ pub struct Admission {
     /// Joined with an account's session: the account's id and name (shown on their cursor and
     /// comments, whatever name the hello gave).
     pub account: Option<(u64, String)>,
+    /// The account's session (its id): ending it disconnects this join
+    /// ([`AccountHandled::ended`](super::AccountHandled::ended)).
+    pub session: Option<String>,
 }
 
 /// The address limits and blocks count a client by: its IPv4 address (an IPv4-mapped IPv6 address

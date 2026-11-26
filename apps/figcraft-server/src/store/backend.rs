@@ -1,3 +1,5 @@
+use serde_json::json;
+
 use super::journal::flush_log;
 use super::team::team_admits;
 use super::{
@@ -5,6 +7,26 @@ use super::{
     Backend, ClientMsg, Closing, Handled, HostInfo, InviteInfo, IpAddr, LibraryReply, LibraryReq, OpenFile, OpenedAccount, PluginReply, PluginReq,
     Server, Store, disk, hash, now, same_secret,
 };
+
+/// What a used or made-up reset code says.
+const RESET_GONE: &str = "this reset code doesn't work: it was used or is too old; ask your admin for a new one";
+/// What an agent's token asking for more than it may says.
+const AGENT_CANT: &str = "an agent's token can't do that: sign in as yourself to share, manage people or delete";
+
+/// Whether an agent token with `access` may send `req`: looking at files and their history, and,
+/// with edit access, publishing and saving versions. Never sharing, members, deletes or admin.
+fn agent_may(req: &AccountReq, access: Access) -> bool {
+    match req {
+        AccountReq::Me | AccountReq::Files | AccountReq::Versions { .. } | AccountReq::Version { .. } | AccountReq::SignOut => true,
+        AccountReq::Publish { .. } | AccountReq::SaveVersion { .. } | AccountReq::Restored { .. } => access == Access::Edit,
+        _ => false,
+    }
+}
+
+/// An email as the audit log keeps it (whatever was typed, cut short).
+fn clip_email(email: &str) -> String {
+    email.trim().chars().filter(|c| !c.is_control()).take(254).collect()
+}
 
 /// What a used, withdrawn or made-up invite code says.
 const INVITE_GONE: &str = "this invite doesn't work: it was used, withdrawn or is too old; ask for a new one";
@@ -20,6 +42,7 @@ fn account_changes(req: &AccountReq) -> bool {
             | AccountReq::Users
             | AccountReq::Versions { .. }
             | AccountReq::Version { .. }
+            | AccountReq::AgentTokens
     )
 }
 
@@ -58,17 +81,22 @@ impl Store {
 impl Backend for Store {
     fn admit(&mut self, file: &str, token: &str) -> Result<Admission, String> {
         if let Some(session) = token.strip_prefix(ACCOUNT_TOKEN) {
-            let (_, user) = self.account_session(session).ok_or("you were signed out of this server: sign in again")?;
-            let access = self.access_of(&user, file).ok_or("this file isn't shared with your account: ask its owner")?;
-            return Ok(Admission { access, link: None, account: Some((user.id, user.name)) });
+            let s = self.account_session(session).ok_or("you were signed out of this server: sign in again")?;
+            let access = self.access_of(&s.user, file).ok_or("this file isn't shared with your account: ask its owner")?;
+            // An agent opens it with at most its token's access, and shows as acting for the account.
+            let (access, name) = match &s.agent {
+                Some(a) => (access.at_most(a.access), format!("{} for {}", a.label, s.user.name)),
+                None => (access, s.user.name.clone()),
+            };
+            return Ok(Admission { access, link: None, account: Some((s.user.id, name)), session: Some(s.id) });
         }
         if self.accounts_only() {
             return Err("this server lets people in with their accounts only: sign in to open its files".into());
         }
-        let team = self.cfg.hosting.team;
+        let team = self.team_access();
         let entry = self.entry(file)?;
         let link = Self::link_of(entry, token).filter(|&i| team_admits(team, entry, i)).and_then(|i| entry.links.get(i));
-        link.map(|l| Admission { access: l.access, link: Some(l.id.clone()), account: None })
+        link.map(|l| Admission { access: l.access, link: Some(l.id.clone()), account: None, session: None })
             .ok_or_else(|| "this link isn't valid (it may have been revoked)".to_string())
     }
 
@@ -337,20 +365,39 @@ impl Backend for Store {
     }
 
     fn open_account(&mut self, ip: IpAddr, auth: AccountAuth) -> Result<OpenedAccount, String> {
-        let signed = match auth {
+        let (signed, how) = match auth {
+            // Coming back (each request opens a connection): not a sign-in.
             AccountAuth::Session { token } => {
-                let (session, user) = self.account_session(&token).ok_or("you were signed out of this server: sign in again")?;
-                return Ok(OpenedAccount { user: user.id, session, reply: AccountReply::SignedIn { token, user } });
+                let s = self.account_session(&token).ok_or("you were signed out of this server: sign in again")?;
+                return Ok(OpenedAccount { user: s.user.id, session: s.id, reply: AccountReply::SignedIn { token, user: s.user } });
             }
-            AccountAuth::Password { email, password } => self.guessed(ip, |s| s.accounts.sign_in(&email, &password))?,
+            AccountAuth::Password { email, password } => match self.guessed(ip, |s| s.accounts.sign_in(&email, &password)) {
+                Ok(signed) => (signed, "password"),
+                Err(why) => {
+                    self.audit.note("sign_in_refused", None, Some(ip), json!({"email": clip_email(&email), "reason": why}));
+                    return Err(why);
+                }
+            },
             AccountAuth::Invite { code, email, name, password } => {
                 // A wrong code is counted as a wrong guess; a right one with details to fix isn't.
                 let open = self.guessed(ip, |s| if s.accounts.invite_open(&code) { Ok(()) } else { Err(INVITE_GONE.into()) });
+                if let Err(why) = &open {
+                    self.audit.note("invite_refused", None, Some(ip), json!({"email": clip_email(&email), "reason": why}));
+                }
                 open?;
-                self.accounts.redeem(&code, &email, &name, &password)?
+                (self.accounts.redeem(&code, &email, &name, &password)?, "invite")
+            }
+            AccountAuth::Reset { code, password } => {
+                let open = self.guessed(ip, |s| if s.accounts.reset_open(&code) { Ok(()) } else { Err(RESET_GONE.into()) });
+                if let Err(why) = &open {
+                    self.audit.note("reset_refused", None, Some(ip), json!({"reason": why}));
+                }
+                open?;
+                (self.accounts.reset(&code, &password)?, "reset code")
             }
         };
         log::info!("event=signed_in user={} ip={ip}", signed.user.id);
+        self.audit.note("signed_in", Some(signed.user.id), Some(ip), json!({"with": how}));
         Ok(OpenedAccount { user: signed.user.id, session: signed.session, reply: AccountReply::SignedIn { token: signed.token, user: signed.user } })
     }
 
@@ -370,26 +417,54 @@ impl Backend for Store {
         if account_changes(&req) && !self.abuse.allow(ip, Action::Admin, self.clock()) {
             return failed(BUSY_ADMIN.into());
         }
+        // An agent's token does only what an agent may, with at most its access.
+        let agent = self.accounts.agent_of(session);
+        if let Some(a) = &agent
+            && !agent_may(&req, a.access)
+        {
+            return failed(AGENT_CANT.into());
+        }
+        let audit = |s: &Store, event: &str, detail: serde_json::Value| s.audit.note(event, Some(user), Some(ip), detail);
         match req {
             AccountReq::Me => AccountReply::Me(me).into(),
-            AccountReq::SignOut => {
-                self.accounts.sign_out(session).map_or_else(failed, |()| AccountHandled { signed_out: Vec::new(), ..AccountReply::Done.into() })
-            }
-            AccountReq::Files => AccountReply::Files(self.account_files(&me)).into(),
-            AccountReq::Members { file } => self.members(&me, &file).map_or_else(failed, |m| AccountReply::Members(m).into()),
-            AccountReq::SetMember { file, email, access } => match self.set_member(&me, &file, &email, access) {
-                Ok(()) => AccountHandled { members_changed: vec![file], ..AccountReply::Done.into() },
+            AccountReq::SignOut => match self.accounts.sign_out(session) {
+                Ok(()) => {
+                    audit(self, "signed_out", json!({}));
+                    AccountHandled { ended: vec![session.to_string()], ..AccountReply::Done.into() }
+                }
                 Err(e) => failed(e),
             },
-            AccountReq::Publish { name, snapshot } => {
-                self.publish_account(&me, &name, &snapshot).map_or_else(failed, |file| AccountReply::Published { file }.into())
+            AccountReq::Files => {
+                let mut files = self.account_files(&me);
+                if let Some(a) = &agent {
+                    files.iter_mut().for_each(|f| f.access = f.access.at_most(a.access));
+                }
+                AccountReply::Files(files).into()
             }
+            AccountReq::Members { file } => self.members(&me, &file).map_or_else(failed, |m| AccountReply::Members(m).into()),
+            AccountReq::SetMember { file, email, access } => match self.set_member(&me, &file, &email, access) {
+                Ok(()) => {
+                    audit(self, "member_changed", json!({"file": file, "member": clip_email(&email), "access": access.map_or("none", Access::id)}));
+                    AccountHandled { members_changed: vec![file], ..AccountReply::Done.into() }
+                }
+                Err(e) => failed(e),
+            },
+            AccountReq::Publish { name, snapshot } => match self.publish_account(&me, &name, &snapshot) {
+                Ok(file) => {
+                    audit(self, "file_published", json!({"file": file, "agent": agent.is_some()}));
+                    AccountReply::Published { file }.into()
+                }
+                Err(e) => failed(e),
+            },
             AccountReq::RenameFile { file, name } => match self.account_manages(&me, &file) {
                 Ok(()) => self.rename(&file, &name).map_or_else(failed, |()| AccountReply::Done.into()),
                 Err(e) => failed(e),
             },
             AccountReq::RemoveFile { file } => match self.account_manages(&me, &file).and_then(|()| self.remove(&file)) {
-                Ok(()) => AccountHandled { removed: Some(file), ..AccountReply::Done.into() },
+                Ok(()) => {
+                    audit(self, "file_deleted", json!({"file": file}));
+                    AccountHandled { removed: Some(file), ..AccountReply::Done.into() }
+                }
                 Err(e) => failed(e),
             },
             AccountReq::Versions { file } => self.versions_for(&me, &file).map_or_else(failed, |v| AccountReply::Versions(v).into()),
@@ -405,17 +480,49 @@ impl Backend for Store {
                 Err(e) => failed(e),
             },
             AccountReq::DeleteVersion { file, id } => match self.change_version(&me, &file, &id, None) {
-                Ok(()) => AccountReply::Versions(self.versions(&file)).into(),
+                Ok(()) => {
+                    audit(self, "version_deleted", json!({"file": file, "version": id}));
+                    AccountReply::Versions(self.versions(&file)).into()
+                }
                 Err(e) => failed(e),
             },
-            AccountReq::ChangePassword { old, new } => {
-                let others = self.accounts.change_password(user, session, &old, &new);
-                others.map_or_else(failed, |()| AccountHandled { signed_out: Vec::new(), ..AccountReply::Done.into() })
-            }
+            AccountReq::Restored { file, id } => match self.access_of(&me, &file) {
+                Some(Access::Edit) => {
+                    audit(self, "version_restored", json!({"file": file, "version": id, "agent": agent.is_some()}));
+                    AccountReply::Done.into()
+                }
+                _ => failed("only someone who may edit the file restores its versions".into()),
+            },
+            AccountReq::ChangePassword { old, new } => match self.accounts.change_password(user, session, &old, &new) {
+                Ok(()) => {
+                    audit(self, "password_changed", json!({}));
+                    AccountHandled { signed_out: Vec::new(), ..AccountReply::Done.into() }
+                }
+                Err(e) => failed(e),
+            },
+            AccountReq::CreateAgentToken { access, label } => match self.accounts.create_agent(user, access, &label) {
+                Ok((id, token, expires)) => {
+                    audit(self, "agent_token_made", json!({"token_id": id, "access": access.id()}));
+                    AccountReply::AgentToken { id, token, expires: i64::try_from(expires).unwrap_or(i64::MAX) }.into()
+                }
+                Err(e) => failed(e),
+            },
+            AccountReq::AgentTokens => AccountReply::AgentTokens(self.accounts.agents(user)).into(),
+            AccountReq::RevokeAgentToken { id } => match self.accounts.revoke_agent(user, &id) {
+                Ok(ended) => {
+                    audit(self, "agent_token_ended", json!({"token_id": id}));
+                    AccountHandled { ended: vec![ended], ..AccountReply::Done.into() }
+                }
+                Err(e) => failed(e),
+            },
             _ if !me.admin => admin_only(),
-            AccountReq::CreateInvite { admin } => {
-                self.accounts.create_invite(admin).map_or_else(failed, |(id, code)| AccountReply::Invite { id, code }.into())
-            }
+            AccountReq::CreateInvite { admin } => match self.accounts.create_invite(admin) {
+                Ok((id, code)) => {
+                    audit(self, "invite_made", json!({"invite": id, "admin": admin}));
+                    AccountReply::Invite { id, code }.into()
+                }
+                Err(e) => failed(e),
+            },
             AccountReq::Invites => {
                 let shown = |(id, admin, created, expires): (String, bool, u64, u64)| InviteInfo {
                     id,
@@ -430,9 +537,19 @@ impl Backend for Store {
             AccountReq::SetUser { id, admin, disabled } => match self.accounts.set_user(user, id, admin, disabled) {
                 // Whoever was disabled is disconnected; a changed role is checked again in every file.
                 Ok(()) => {
+                    audit(self, "account_changed", json!({"target": id, "admin": admin, "disabled": disabled}));
                     let signed_out = if disabled == Some(true) { vec![id] } else { Vec::new() };
                     let members_changed = if admin.is_some() { self.files.keys().cloned().collect() } else { Vec::new() };
                     AccountHandled { signed_out, members_changed, ..AccountReply::Done.into() }
+                }
+                Err(e) => failed(e),
+            },
+            AccountReq::ResetPassword { id } => match self.accounts.reset_code(user, id) {
+                // Its sessions ended: whoever is signed in as it is disconnected.
+                Ok((code, expires)) => {
+                    audit(self, "password_reset_issued", json!({"target": id}));
+                    let reply = AccountReply::ResetCode { code, expires: i64::try_from(expires).unwrap_or(i64::MAX) };
+                    AccountHandled { signed_out: vec![id], ..reply.into() }
                 }
                 Err(e) => failed(e),
             },

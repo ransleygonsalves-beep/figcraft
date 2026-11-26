@@ -7,16 +7,17 @@
 //! Publishing ([`publish`]) uploads the document, makes the links and codes others join with when
 //! it shares, then joins the new file with its edit link; [`background`] sends the hosting and
 //! sharing requests the engine sends in the background (asking a server about its hosting,
-//! starting and stopping a share) and those about team libraries and plugin directories;
-//! [`libraries`] the checks of a file's team libraries.
+//! starting and stopping a share), those about team libraries and plugin directories, and those
+//! of an account (signing in, its files, sharing, version history); [`libraries`] the checks of a
+//! file's team libraries.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use figcraft_collab::message::{
-    self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply,
-    PluginReq, ServerMsg,
+    self, AccountAuth, AccountReply, AccountReq, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenAccount, OpenHosting,
+    OpenLibrary, OpenPlugins, PROTOCOL, PluginReply, PluginReq, ServerMsg,
 };
 use figcraft_engine::live::{Event, NetReply, NetRequest, Shared, Status};
 
@@ -44,6 +45,9 @@ pub(crate) struct Answers {
     /// The answer on a library or plugin directory connection.
     pub(crate) library: Option<LibraryReply>,
     pub(crate) plugins: Option<PluginReply>,
+    /// On an account connection: who signed in (the reply that opened it), then the answers.
+    pub(crate) signed_in: Option<AccountReply>,
+    pub(crate) account: Vec<AccountReply>,
 }
 
 /// What follows an exchange's answers (or why it failed).
@@ -85,6 +89,13 @@ impl Exchange {
     pub(crate) fn plugins(server: Endpoint, key: String, req: PluginReq) -> Self {
         let open = OpenPlugins { protocol: PROTOCOL, key, client_version: message::client_version() };
         Self::opened(server, ClientMsg::OpenPlugins(open), VecDeque::from([ClientMsg::Plugins(req)]))
+    }
+
+    /// Sign in to `server` with `auth` (the session's token travels in this first message, never
+    /// in the address), then ask `requests` as that account.
+    pub(crate) fn account(server: Endpoint, auth: AccountAuth, requests: Vec<AccountReq>) -> Self {
+        let open = OpenAccount { protocol: PROTOCOL, client_version: message::client_version(), auth };
+        Self::opened(server, ClientMsg::OpenAccount(open), requests.into_iter().map(ClientMsg::Account).collect())
     }
 
     fn opened(server: Endpoint, open: ClientMsg, requests: VecDeque<ClientMsg>) -> Self {
@@ -134,6 +145,15 @@ impl Exchange {
             ServerMsg::Library(r) if !self.ready => match *r {
                 LibraryReply::Ready { .. } => self.ready = true,
                 other => return Err(format!("the server answered {other:?} instead of opening the library")),
+            },
+            ServerMsg::Account(r) if self.asked => self.answers.account.push(*r),
+            ServerMsg::Account(r) if !self.ready && matches!(self.open, ClientMsg::OpenAccount(_)) => match *r {
+                AccountReply::Failed { reason } => return Err(reason),
+                signed @ AccountReply::SignedIn { .. } => {
+                    self.ready = true;
+                    self.answers.signed_in = Some(signed);
+                }
+                other => return Err(format!("the server answered {other:?} instead of signing in")),
             },
             ServerMsg::Plugins(r) if self.asked => self.answers.plugins = Some(*r),
             ServerMsg::Plugins(r) if !self.ready => match *r {
@@ -313,7 +333,49 @@ pub(crate) fn background(job: u64, req: NetRequest) -> Option<Next> {
             }
         },
         NetRequest::Upload(_) => return None,
-        // Signing in to a server works in the desktop app for now.
-        NetRequest::Account { .. } => answer(NetReply::Account(Err("signing in to a server works in the desktop app for now".into()))),
+        NetRequest::Account { server, auth, reqs } => match Endpoint::parse(&server) {
+            Err(e) => answer(NetReply::Account(Err(e))),
+            Ok((server, _)) => Next::Ask(
+                Box::new(Exchange::account(server, auth, reqs)),
+                Box::new(move |a| {
+                    let r = a.and_then(|a| Ok((a.signed_in.ok_or("the server didn't sign you in")?, a.account)));
+                    answer(NetReply::Account(r))
+                }),
+            ),
+        },
     })
+}
+
+#[cfg(test)]
+mod account_tests {
+    use figcraft_collab::message::{AccountAuth, AccountReply, AccountReq, AccountUser, ClientMsg, ServerMsg};
+
+    use super::Exchange;
+    use crate::invite::Endpoint;
+
+    fn ada() -> AccountUser {
+        AccountUser { id: 1, email: "ada@example.com".into(), name: "Ada".into(), admin: false, disabled: false }
+    }
+
+    /// The browser's account requests: the session's token goes in the first message only (the
+    /// address it connects to has none), then the requests are answered in order; a refusal at
+    /// the door (signed out) fails the exchange with the server's reason.
+    #[test]
+    fn signs_in_in_the_first_message_then_asks_in_order() {
+        let server = Endpoint::plain("127.0.0.1:47900");
+        let mut ex = Exchange::account(server, AccountAuth::Session { token: "secret".into() }, vec![AccountReq::Files, AccountReq::Me]);
+        assert!(!ex.server.url().contains("secret"));
+        assert!(matches!(ex.opening(), ClientMsg::OpenAccount(o) if o.auth == AccountAuth::Session { token: "secret".into() }));
+        let signed = AccountReply::SignedIn { token: "secret".into(), user: ada() };
+        assert!(matches!(ex.take(ServerMsg::Account(Box::new(signed))), Ok(Some(ClientMsg::Account(AccountReq::Files)))));
+        assert!(matches!(ex.take(ServerMsg::Account(Box::new(AccountReply::Files(vec![])))), Ok(Some(ClientMsg::Account(AccountReq::Me)))));
+        assert!(matches!(ex.take(ServerMsg::Account(Box::new(AccountReply::Me(ada())))), Ok(None)));
+        assert!(ex.done());
+        let a = ex.answers();
+        assert!(matches!(a.signed_in, Some(AccountReply::SignedIn { .. })));
+        assert_eq!(a.account, vec![AccountReply::Files(vec![]), AccountReply::Me(ada())]);
+        let mut refused = Exchange::account(Endpoint::plain("127.0.0.1:47900"), AccountAuth::Session { token: "old".into() }, vec![]);
+        let out = refused.take(ServerMsg::Refused { reason: "you were signed out of this server: sign in again".into() });
+        assert!(out.is_err_and(|e| e.contains("signed out")));
+    }
 }

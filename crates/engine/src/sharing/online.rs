@@ -110,7 +110,7 @@ fn clean_name(s: &str) -> String {
 }
 
 /// A server address without its query, as recorded.
-pub(crate) fn plain_server(server: &str) -> String {
+pub fn plain_server(server: &str) -> String {
     server.split('?').next().unwrap_or_default().trim().to_string()
 }
 

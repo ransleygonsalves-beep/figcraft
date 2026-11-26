@@ -373,6 +373,8 @@ pub struct Store {
     usage: BTreeMap<String, UsageCache>,
     /// The people who sign in, their invites and sessions.
     accounts: crate::accounts::Accounts,
+    /// Where sign-ins, shares and deletions are noted (see [`crate::audit`]).
+    audit: crate::audit::Audit,
     blocked: BTreeSet<IpAddr>,
     reports: Vec<ReportInfo>,
     /// Hashes of join codes that no longer open anything (their link was revoked, their file
@@ -520,6 +522,7 @@ impl Store {
             frozen: None,
             usage: BTreeMap::new(),
             accounts,
+            audit: crate::audit::Audit::new(root),
             blocked: BTreeSet::new(),
             reports: Vec::new(),
             gone_codes: VecDeque::new(),
