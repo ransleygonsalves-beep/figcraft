@@ -5,11 +5,11 @@ use figcraft_color::Color;
 use figcraft_color::{ImageFilters, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::{Document, ImagePreset, Node, NodeId, NodeKind, VectorNetwork};
 use figcraft_geom::Affine;
-use figcraft_pathops::trace::{TraceOptions, trace};
+use figcraft_pathops::trace::TraceOptions;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{f64_of, get, num_or, req_index, req_string, req_targets, string, targets};
+use crate::params::{boolean, f64_of, get, num_or, req_index, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "image.vectorize",
             "Vectorize image",
-            "{ids?, colors? (2–64, default 16), detail? (0–1, default 0.5: higher keeps smaller shapes and follows edges more closely)}  traces each layer with an image fill as it shows (crop, fill mode and adjustments included) into filled vector shapes, one per colour, stacked largest first in a group placed just above it; the layer itself is hidden, not removed. Pixels more than half transparent are left out, so an image whose background was removed traces without it. Returns {ids (the new groups), shapes (vectors made)}",
+            "{ids?, colors? (2–64, default 16), detail? (0–1, default 0.5: higher keeps smaller shapes and follows edges more closely), wait? (bool), cancel? (bool)}  traces each layer with an image fill as it shows (crop, fill mode and adjustments included) into filled vector shapes, one per colour, stacked largest first in a group placed just above it; the layer itself is hidden, not removed. Pixels more than half transparent are left out, so an image whose background was removed traces without it. The tracing runs on its own thread: the first call returns {state: working, done (0–1), images}; call again (ids optional) for its progress, and once it is done the next call in the same file puts the shapes in as one undo step and returns {state: vectorized, ids (the new groups), shapes}. `cancel: true` stops a running job (the next call returns {state: cancelled}); `wait: true` traces in this call and returns the shapes at once (the browser always does)",
             true,
             vectorize
         ),
@@ -288,36 +288,64 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
 const TRACE_SIDE: f64 = 1024.0;
 
 fn vectorize(s: &mut Session, p: &Value) -> Result<Value> {
+    use crate::vectorize::{self as job, Job};
     let cmd = "image.vectorize";
+    let refuse = |why: &str| EngineError::Disabled(cmd.into(), why.into());
+    let uid = s.ds()?.uid;
+    if boolean(p, "cancel") == Some(true) {
+        return if job::cancel() { Ok(json!({"state": "cancelling"})) } else { Err(refuse("nothing is being vectorized")) };
+    }
+    // A job of this file that ended: its shapes go in, or it says why not.
+    match job::take_finished(uid) {
+        Some(Job::Done { traced, .. }) => return put_traced(s, traced),
+        Some(Job::Cancelled { .. }) => {
+            let state = json!({"state": "cancelled"});
+            s.request_ui(cmd, state.clone());
+            return Ok(state);
+        }
+        Some(Job::Failed { error, .. }) => return Err(bad(cmd, error)),
+        _ => {}
+    }
+    if let Some(Job::Running { doc, done, images }) = job::status() {
+        if doc != uid {
+            return Err(refuse("an image is being vectorized in another file; try again when it is done"));
+        }
+        let state = json!({"state": "working", "done": done, "images": images});
+        s.request_ui(cmd, state.clone());
+        return Ok(state);
+    }
     let ids = req_targets(cmd, s, p)?;
     let colors = num_or(p, "colors", 16.0).round().clamp(2.0, figcraft_pathops::trace::MAX_COLORS as f64) as usize;
     let detail = num_or(p, "detail", 0.5).clamp(0.0, 1.0);
-    let doc = s.doc_mut()?;
-    let refuse = |why: &str| EngineError::Disabled(cmd.into(), why.into());
-    let mut groups = Vec::new();
-    let mut shapes = 0;
+    let doc = s.doc()?;
+    let mut sources = Vec::new();
     for id in ids {
-        let n = doc.get(id)?;
-        if top_image_fill(n).is_none() {
+        if top_image_fill(doc.get(id)?).is_none() {
             continue;
         }
         if crate::components::owning_instance(doc, id).is_some() {
             return Err(refuse("a layer inside an instance can't be vectorized; detach the instance first"));
         }
-        let (group, made) = vectorize_one(doc, id, colors, detail).ok_or_else(|| refuse("the image couldn't be traced"))?;
-        groups.push(group);
-        shapes += made;
+        sources.push(source(doc, id, colors, detail).ok_or_else(|| refuse("the image couldn't be traced"))?);
     }
-    if groups.is_empty() {
+    if sources.is_empty() {
         return Err(refuse("select a layer with an image fill"));
     }
-    s.set_selection(groups.clone());
-    Ok(json!({"ids": groups, "shapes": shapes}))
+    // The browser has no threads to trace on; `wait` asks for the shapes in this call.
+    if cfg!(target_arch = "wasm32") || boolean(p, "wait") == Some(true) {
+        let traced = job::run(&sources, &mut |_| true).map_err(|_| refuse("the image couldn't be traced"))?;
+        return put_traced(s, traced);
+    }
+    let images = sources.len();
+    #[cfg(not(target_arch = "wasm32"))]
+    job::start(uid, sources);
+    let state = json!({"state": "working", "done": 0.0, "images": images});
+    s.request_ui(cmd, state.clone());
+    Ok(state)
 }
 
-/// Trace layer `id` as it shows into a group of vectors just above it, and hide it: the group's id
-/// and how many vectors it holds.
-fn vectorize_one(doc: &mut Document, id: NodeId, colors: usize, detail: f64) -> Option<(NodeId, usize)> {
+/// Layer `id` as it shows (crop, fill mode and adjustments included), ready to trace.
+fn source(doc: &Document, id: NodeId, colors: usize, detail: f64) -> Option<crate::vectorize::Source> {
     let bounds = doc.world_bounds(id)?;
     // At most the image's own resolution: scaled up, its edges would blur into bands of colours
     // in between.
@@ -328,7 +356,7 @@ fn vectorize_one(doc: &mut Document, id: NodeId, colors: usize, detail: f64) -> 
         .map_or(f64::INFINITY, |d| (f64::from(d.width) / bounds.width().max(1.0)).max(f64::from(d.height) / bounds.height().max(1.0)));
     let scale = (TRACE_SIDE / bounds.width().max(bounds.height()).max(1.0)).min(native.max(1.0));
     let pix = figcraft_render::render_area_at(doc, &[id], bounds, scale, 0.0)?;
-    let (w, h) = (pix.width() as usize, pix.height() as usize);
+    let (width, height) = (pix.width() as usize, pix.height() as usize);
     // The renderer's pixels are premultiplied; the tracer reads plain colours.
     let rgba: Vec<u8> = pix
         .data()
@@ -339,24 +367,47 @@ fn vectorize_one(doc: &mut Document, id: NodeId, colors: usize, detail: f64) -> 
             [plain(c[0]), plain(c[1]), plain(c[2]), c[3]]
         })
         .collect();
-    let speckle = 2 + ((1.0 - detail).powi(2) * (w * h) as f64 * 0.0004) as usize;
-    let opt = TraceOptions { colors, speckle, tolerance: 0.4 + (1.0 - detail) * 1.6 };
-    let layers = trace(&rgba, w, h, &opt)?;
-    let n = doc.get(id).ok()?;
+    let speckle = 2 + ((1.0 - detail).powi(2) * (width * height) as f64 * 0.0004) as usize;
+    let options = TraceOptions { colors, speckle, tolerance: 0.4 + (1.0 - detail) * 1.6 };
+    Some(crate::vectorize::Source { node: id, bounds, scale, rgba, width, height, options })
+}
+
+/// Put traced layers in: each as a group of vectors just above its layer, which is hidden (one
+/// undo step for them all). A layer deleted meanwhile is skipped.
+fn put_traced(s: &mut Session, traced: Vec<crate::vectorize::Traced>) -> Result<Value> {
+    let doc = s.doc_mut()?;
+    let mut groups = Vec::new();
+    let mut shapes = 0;
+    for t in traced {
+        if let Some((group, made)) = put_one(doc, &t) {
+            groups.push(group);
+            shapes += made;
+        }
+    }
+    if !groups.is_empty() {
+        s.set_selection(groups.clone());
+    }
+    let state = json!({"state": "vectorized", "ids": groups, "shapes": shapes});
+    s.request_ui("image.vectorize", state.clone());
+    Ok(state)
+}
+
+/// One traced layer as a group of vectors just above it, the layer hidden: the group's id and how
+/// many vectors it holds.
+fn put_one(doc: &mut Document, t: &crate::vectorize::Traced) -> Option<(NodeId, usize)> {
+    let n = doc.get(t.node).ok()?;
     let parent = n.parent?;
     let name = format!("{} vector", n.name);
-    let index = doc.index_in_parent(id).map(|i| i + 1);
-    let local = doc.world_transform(parent).inverse();
-    // Trace pixels to page units to the parent's space.
-    let to_local = local * Affine::translate((bounds.x0, bounds.y0)) * Affine::scale(1.0 / scale);
+    let index = doc.index_in_parent(t.node).map(|i| i + 1);
+    // The group sits where the layer's pixels were; its vectors are in page units from there.
     let gid = doc.alloc_id();
-    let mut group = Node::new(gid, NodeKind::Group, name, bounds.width(), bounds.height());
-    group.transform = local * Affine::translate((bounds.x0, bounds.y0));
+    let mut group = Node::new(gid, NodeKind::Group, name, t.bounds.width(), t.bounds.height());
+    group.transform = doc.world_transform(parent).inverse() * Affine::translate((t.bounds.x0, t.bounds.y0));
     doc.insert(group, parent, index).ok()?;
-    let to_group = (local * Affine::translate((bounds.x0, bounds.y0))).inverse() * to_local;
+    let to_group = Affine::scale(1.0 / t.scale);
     let mut made = 0;
-    for layer in layers {
-        let path = to_group * layer.path;
+    for layer in &t.layers {
+        let path = to_group * layer.path.clone();
         let mut net = VectorNetwork::from_path(&path);
         let Some(bb) = net.bounds() else { continue };
         net.translate(-bb.x0, -bb.y0);
@@ -369,7 +420,7 @@ fn vectorize_one(doc: &mut Document, id: NodeId, colors: usize, detail: f64) -> 
         made += 1;
     }
     let _ = doc.fit_to_children(gid);
-    if let Ok(n) = doc.get_mut(id) {
+    if let Ok(n) = doc.get_mut(t.node) {
         n.visible = false;
     }
     Some((gid, made))

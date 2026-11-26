@@ -3,7 +3,7 @@
 
 use figcraft_geom::kurbo::{Point, Shape};
 
-use crate::trace::{MAX_PIXELS, TraceOptions, trace};
+use crate::trace::{MAX_PIXELS, TraceOptions, TraceStop, trace, trace_with};
 
 const OPT: TraceOptions = TraceOptions { colors: 8, speckle: 4, tolerance: 1.0 };
 
@@ -88,4 +88,25 @@ fn nothing_opaque_traces_to_nothing_and_bad_input_is_refused() {
     assert!(trace(&[], usize::MAX, 2, &OPT).is_none(), "an overflowing size");
     let side = (MAX_PIXELS as f64).sqrt() as usize + 1;
     assert!(trace(&vec![255; side * side * 4], side, side, &OPT).is_none(), "past the pixel cap");
+}
+
+#[test]
+fn progress_rises_to_the_end_and_cancelling_stops_it() {
+    let img = image(40, 30, |x, y| if inside(x, y, 10, 8, 25, 20) { RED } else { WHITE });
+    let mut seen = Vec::new();
+    let layers = trace_with(&img, 40, 30, &OPT, &mut |f| {
+        seen.push(f);
+        true
+    })
+    .unwrap();
+    assert_eq!(layers.len(), 2);
+    assert!(seen.windows(2).all(|w| w[0] <= w[1]), "never goes back: {seen:?}");
+    assert_eq!(seen.last(), Some(&1.0));
+    let mut calls = 0;
+    let stopped = trace_with(&img, 40, 30, &OPT, &mut |_| {
+        calls += 1;
+        calls < 3
+    });
+    assert_eq!(stopped.err(), Some(TraceStop::Cancelled));
+    assert_eq!(calls, 3, "stops at the first no");
 }

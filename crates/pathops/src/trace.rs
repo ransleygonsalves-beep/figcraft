@@ -56,18 +56,43 @@ const ROUNDS: usize = 12;
 /// bottom to top. Pixels at least half transparent are left out. `None` when the buffer doesn't
 /// match the size or the image is past [`MAX_PIXELS`]; an image with nothing opaque gives none.
 pub fn trace(rgba: &[u8], width: usize, height: usize, opt: &TraceOptions) -> Option<Vec<TracedLayer>> {
-    let n = width.checked_mul(height)?;
+    trace_with(rgba, width, height, opt, &mut |_| true).ok()
+}
+
+/// Why [`trace_with`] gave no shapes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceStop {
+    /// The buffer doesn't match the size, or the image is past [`MAX_PIXELS`].
+    BadInput,
+    /// `progress` said to stop.
+    Cancelled,
+}
+
+/// [`trace`], telling `progress` how far it got (0–1) after each step; when it returns false the
+/// tracing stops ([`TraceStop::Cancelled`]).
+pub fn trace_with(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    opt: &TraceOptions,
+    progress: &mut dyn FnMut(f32) -> bool,
+) -> Result<Vec<TracedLayer>, TraceStop> {
+    let n = width.checked_mul(height).ok_or(TraceStop::BadInput)?;
     if n == 0 || n > MAX_PIXELS || rgba.len() != n * 4 {
-        return None;
+        return Err(TraceStop::BadInput);
     }
     let pixel = |i: usize| [rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]];
     let opaque = |i: usize| rgba[i * 4 + 3] >= 128;
     let centres = palette(n, &pixel, &opaque, opt.colors.clamp(2, MAX_COLORS));
     if centres.is_empty() {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
+    // The colours take about a fifth of the time, the outlines the rest.
+    let go = |progress: &mut dyn FnMut(f32) -> bool, f: f32| if progress(f) { Ok(()) } else { Err(TraceStop::Cancelled) };
+    go(progress, 0.1)?;
     let mut labels: Vec<u16> = (0..n).map(|i| if opaque(i) { nearest(&centres, pixel(i)) } else { CLEAR }).collect();
     merge_speckles(&mut labels, width, height, opt.speckle.max(1));
+    go(progress, 0.2)?;
     // Each colour's own average (the pixels it ended up with), and how many it has.
     let mut sums = vec![([0u64; 3], 0usize); centres.len()];
     for (i, l) in labels.iter().enumerate() {
@@ -88,6 +113,7 @@ pub fn trace(rgba: &[u8], width: usize, height: usize, opt: &TraceOptions) -> Op
     }
     let mut layers = Vec::with_capacity(order.len());
     for (r, l) in order.iter().enumerate() {
+        go(progress, 0.2 + 0.8 * r as f32 / order.len() as f32)?;
         let (sum, count) = sums[*l];
         let avg = |c: usize| u8::try_from(sum[c] / count as u64).unwrap_or(u8::MAX);
         // This colour and every colour above it.
@@ -100,7 +126,8 @@ pub fn trace(rgba: &[u8], width: usize, height: usize, opt: &TraceOptions) -> Op
             layers.push(TracedLayer { color: [avg(0), avg(1), avg(2)], path });
         }
     }
-    Some(layers)
+    go(progress, 1.0)?;
+    Ok(layers)
 }
 
 fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
