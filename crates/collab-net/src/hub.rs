@@ -31,8 +31,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
-    self, Access, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Presence, Resolve, ResolveTeam, ServerMsg, reads_hosting,
+    self, Access, AccountAuth, AccountReply, AccountReq, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage,
+    OpenAccount, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply, PluginReq, Presence, Resolve, ResolveTeam, ServerMsg, reads_hosting,
 };
 use figcraft_collab::{Outgoing, Server};
 use figcraft_engine::live::{Event, MAX_NAME, PEOPLE, sanitize};
@@ -52,7 +52,7 @@ mod hosting;
 mod limits;
 mod queue;
 
-pub use backend::{Backend, Closing, Handled, OpenFile};
+pub use backend::{AccountHandled, Backend, Closing, Handled, OpenFile, OpenedAccount};
 pub use conn::{SIGNAL_BURST, SIGNAL_RATE};
 use conn::{encode, reason, refuse, refused};
 pub use hosting::Hosting;
@@ -69,8 +69,9 @@ const BURST: usize = 256;
 
 /// What a connection is for.
 enum Kind {
-    /// In `file`'s session as client `id`, through link `link`.
-    Joined { file: String, id: u32, link: Option<String> },
+    /// In `file`'s session as client `id`, through link `link`, or with an account (its id and what
+    /// it was let do).
+    Joined { file: String, id: u32, link: Option<String>, account: Option<(u64, Access)> },
     /// Managing the server's files; `comments`: its client reads comment links.
     Managing { comments: bool },
     /// Using `file`'s team library through link `link` of `access` (revoking it disconnects).
@@ -80,6 +81,8 @@ enum Kind {
     /// Publishing without the key, or managing the file `owns` with its owner token; `comments`:
     /// its client reads comment links.
     Hosting { owns: Option<String>, comments: bool },
+    /// Signed in as account `user`, in session `session` (its token's hash).
+    Account { user: u64, session: String },
 }
 
 /// A connection whose first message the hub is looking at.
@@ -228,6 +231,7 @@ impl<B: Backend> Hub<B> {
                     ClientMsg::OpenHosting(o) => self.open_hosting(conn, &o, c),
                     ClientMsg::Resolve(r) => self.resolve(&r, &c),
                     ClientMsg::ResolveTeam(r) => self.resolve_team(&r, &c),
+                    ClientMsg::OpenAccount(o) => self.open_account(conn, o, c),
                     _ => refuse(&c.out, "say hello first"),
                 }
             }
@@ -283,6 +287,14 @@ impl<B: Backend> Hub<B> {
                 let (file, id) = (file.clone(), *id);
                 self.client_message(&file, id, msg, Some(bytes));
             }
+            Some(Kind::Account { user, session }) => match msg {
+                ClientMsg::Account(req) => {
+                    let (user, session) = (*user, session.clone());
+                    self.account(conn, ip, user, &session, req);
+                }
+                ClientMsg::Ping => self.answer(conn, &ServerMsg::Pong),
+                _ => self.kick(&[conn], "only account requests are spoken on this connection"),
+            },
             Some(Kind::Hosting { owns, .. }) => match msg {
                 ClientMsg::Admin(Admin::RemovePeer { file, client }) => {
                     let reply = if owns.as_deref() == Some(file.as_str()) {
@@ -377,6 +389,11 @@ impl<B: Backend> Hub<B> {
         let packed = message::reads_packed(&hello.client_version);
         // The backend checked the secret: the sessions don't keep it.
         hello.token.clear();
+        // An account's name, not whatever the hello says, is who they are.
+        if let Some((_, name)) = &admission.account {
+            hello.name = name.clone();
+        }
+        let account = admission.account.as_ref().map(|(user, _)| (*user, admission.access));
         let file = hello.file.clone();
         if !self.rooms.contains_key(&file) {
             match self.backend.open(&file) {
@@ -417,8 +434,10 @@ impl<B: Backend> Hub<B> {
                     shutdown(&c.sock);
                 }
                 let _ = c.admitted.try_send(());
-                self.conns
-                    .insert(conn, Conn { out: c.out, sock: c.sock, kind: Kind::Joined { file: file.clone(), id, link: admission.link }, ip: c.ip });
+                self.conns.insert(
+                    conn,
+                    Conn { out: c.out, sock: c.sock, kind: Kind::Joined { file: file.clone(), id, link: admission.link, account }, ip: c.ip },
+                );
                 self.queue(&file, more);
             }
             Err(ServerMsg::Refused { reason }) => {
@@ -521,6 +540,79 @@ impl<B: Backend> Hub<B> {
         let owns = (!o.owner.is_empty()).then(|| o.file.clone());
         let comments = message::reads_comments(&o.client_version);
         self.take_in(conn, c, Kind::Hosting { owns, comments }, &ServerMsg::Hosting(Box::new(info)));
+    }
+
+    /// An account connection: signed in (or back with a session, or a new account from an invite),
+    /// it takes account requests.
+    fn open_account(&mut self, conn: u64, o: OpenAccount, c: Pending) {
+        if o.protocol != PROTOCOL {
+            return refuse(&c.out, &unsupported(o.protocol));
+        }
+        match self.backend.open_account(c.ip, o.auth) {
+            Ok(opened) => {
+                let kind = Kind::Account { user: opened.user, session: opened.session };
+                self.take_in(conn, c, kind, &ServerMsg::Account(Box::new(opened.reply)));
+            }
+            Err(why) => {
+                log::info!("event=account_refused ip={} reason={why:?}", c.ip);
+                refuse(&c.out, &why);
+            }
+        }
+    }
+
+    /// A request on an account connection, and what it does to others' connections.
+    fn account(&mut self, conn: u64, ip: IpAddr, user: u64, session: &str, req: AccountReq) {
+        let rooms = &self.rooms;
+        let open = |file: &str| rooms.get(file).map(Room::info);
+        let handled = self.backend.account(ip, user, session, req, &open);
+        self.answer(conn, &ServerMsg::Account(Box::new(handled.reply)));
+        // Who joined a file with an account and may no longer, or may now do something else, is
+        // told the session is over for them (they join again with what they may do now).
+        for file in handled.members_changed {
+            let joined: Vec<(u64, u64, Access)> = self
+                .conns
+                .iter()
+                .filter_map(|(k, c)| match &c.kind {
+                    Kind::Joined { file: f, account: Some((u, a)), .. } if *f == file => Some((*k, *u, *a)),
+                    _ => None,
+                })
+                .collect();
+            let gone: Vec<u64> = joined.into_iter().filter(|(_, u, a)| self.backend.account_access(*u, &file) != Some(*a)).map(|(k, ..)| k).collect();
+            for conn in &gone {
+                if let Some(c) = self.conns.get(conn)
+                    && c.out.tx.try_send(Out::Close(CloseCode::Away, STOPPED.into())).is_err()
+                {
+                    shutdown(&c.sock);
+                }
+                self.gone(*conn);
+            }
+        }
+        if let Some(file) = handled.removed {
+            let users: Vec<u64> = self
+                .conns
+                .iter()
+                .filter(|(_, c)| matches!(&c.kind, Kind::Joined { file: f, .. } | Kind::Library { file: f, .. } if *f == file))
+                .map(|(k, _)| *k)
+                .collect();
+            self.rooms.remove(&file);
+            self.barred.remove(&file);
+            self.kick(&users, "this file was removed from the server");
+        }
+        if !handled.signed_out.is_empty() {
+            let users: Vec<u64> = self
+                .conns
+                .iter()
+                .filter(|(k, c)| {
+                    **k != conn
+                        && match &c.kind {
+                            Kind::Joined { account: Some((u, _)), .. } | Kind::Account { user: u, .. } => handled.signed_out.contains(u),
+                            _ => false,
+                        }
+                })
+                .map(|(k, _)| *k)
+                .collect();
+            self.kick(&users, "you were signed out of this server");
+        }
     }
 
     /// A join code: the file it opens and the token to join it with, then the connection closes

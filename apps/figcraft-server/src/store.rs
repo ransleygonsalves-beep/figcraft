@@ -40,11 +40,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::message::{
-    Access, Admin, AdminReply, AssetActions, AssetUsage, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply,
-    LibraryReq, LinkInfo, MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
+    ACCOUNT_TOKEN, Access, AccountAuth, AccountReply, AccountReq, Admin, AdminReply, AssetActions, AssetUsage, ClientMsg, Detached, FileDetached,
+    FileInfo, FileRow, FileUsage, HostInfo, InviteInfo, LibraryReply, LibraryReq, LinkInfo, MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq,
+    ReportInfo, Usage, WeekActions,
 };
 use figcraft_collab::{Change, NodeId, Replica, Server, same_secret};
-use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
+use figcraft_collab_net::hub::{AccountHandled, Admission, Backend, Closing, Handled, OpenFile, OpenedAccount, ip_blocks, ip_key};
 use figcraft_collab_net::token;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -59,6 +60,7 @@ mod files;
 mod journal;
 mod library;
 mod links;
+mod members;
 pub(crate) mod team;
 
 pub use library::library_name;
@@ -156,6 +158,8 @@ pub struct HostingConfig {
     pub team: Option<Access>,
     /// Where the browser build is served (`web_url`; empty: not said).
     pub web: String,
+    /// People get in with their accounts only (`accounts_only`): links and join codes are refused.
+    pub accounts_only: bool,
 }
 
 impl Default for HostingConfig {
@@ -172,6 +176,7 @@ impl Default for HostingConfig {
             abuse: AbuseConfig { open: false, connects_per_minute: 30, publishes_per_hour: 10, messages_per_second: 200 },
             team: None,
             web: String::new(),
+            accounts_only: false,
         }
     }
 }
@@ -195,6 +200,12 @@ struct Meta {
     /// When someone last opened it (seconds since 1970).
     #[serde(default)]
     opened: u64,
+    /// Published by an account: it owns the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_owner: Option<u64>,
+    /// The other accounts that may open it, and what they may do.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    members: BTreeMap<u64, Access>,
 }
 
 impl Meta {
@@ -353,6 +364,8 @@ pub struct Store {
     pub(crate) frozen: Option<Instant>,
     /// Usage reports by library file.
     usage: BTreeMap<String, UsageCache>,
+    /// The people who sign in, their invites and sessions.
+    accounts: crate::accounts::Accounts,
     blocked: BTreeSet<IpAddr>,
     reports: Vec<ReportInfo>,
     /// Hashes of join codes that no longer open anything (their link was revoked, their file
@@ -486,6 +499,7 @@ impl Store {
         fs::create_dir_all(&dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
         let (directory, startup_problems) = Directory::open(root, cfg.directory);
         let abuse = Abuse::new(cfg.hosting.abuse);
+        let accounts = crate::accounts::Accounts::load(root)?;
         let mut store = Store {
             root: root.to_path_buf(),
             cfg,
@@ -498,6 +512,7 @@ impl Store {
             #[cfg(test)]
             frozen: None,
             usage: BTreeMap::new(),
+            accounts,
             blocked: BTreeSet::new(),
             reports: Vec::new(),
             gone_codes: VecDeque::new(),

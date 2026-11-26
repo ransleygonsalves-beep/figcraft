@@ -37,6 +37,7 @@ Usage:
   figcraft-server block-ip IP                    refuse an address (an IPv6 address: its /64) and drop its connections
   figcraft-server unblock-ip IP                  accept an address again
   figcraft-server blocked                        the blocked addresses
+  figcraft-server invite [--admin]               a one-time code that makes an account (the first one: --admin)
 
 Options (also keys of the --config TOML file):
   --listen ADDR       where to listen (default 127.0.0.1:47900; 0.0.0.0:47900 for every network)
@@ -74,19 +75,45 @@ pub enum Sort {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Serve,
-    Key { rotate: bool },
-    Files { sort: Sort },
-    RemoveFile { file: String },
-    Links { file: String },
-    CreateLink { file: String, access: Access, label: String },
-    Revoke { file: String, link: String },
+    Key {
+        rotate: bool,
+    },
+    Files {
+        sort: Sort,
+    },
+    RemoveFile {
+        file: String,
+    },
+    Links {
+        file: String,
+    },
+    CreateLink {
+        file: String,
+        access: Access,
+        label: String,
+    },
+    Revoke {
+        file: String,
+        link: String,
+    },
     Plugins,
-    RemovePlugin { id: String, version: Option<String> },
+    RemovePlugin {
+        id: String,
+        version: Option<String>,
+    },
     Reports,
     Check,
-    Block { ip: String },
-    Unblock { ip: String },
+    Block {
+        ip: String,
+    },
+    Unblock {
+        ip: String,
+    },
     Blocked,
+    /// A one-time invite that makes an account (`--admin`: an admin one).
+    Invite {
+        admin: bool,
+    },
     Help,
     Version,
 }
@@ -109,6 +136,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
     let mut access = None;
     let mut label = String::new();
     let mut rotate = false;
+    let mut admin_invite = false;
     let mut version = None;
     let mut sort = Sort::Id;
     let mut it = args.iter();
@@ -128,6 +156,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--access" => access = Some(Access::parse(&value("--access")?).ok_or("--access must be edit, comment or view")?),
             "--label" => label = value("--label")?,
             "--rotate" => rotate = true,
+            "--admin" => admin_invite = true,
             "--sort" => {
                 sort = match value("--sort")?.as_str() {
                     "size" => Sort::Size,
@@ -158,6 +187,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
         ["block-ip", ip] => Command::Block { ip: ip.to_string() },
         ["unblock-ip", ip] => Command::Unblock { ip: ip.to_string() },
         ["blocked"] => Command::Blocked,
+        ["invite"] => Command::Invite { admin: admin_invite },
         _ => return Err(format!("unknown command `{}`", words.join(" "))),
     };
     config.check()?;
@@ -222,6 +252,19 @@ pub fn run(cli: &Cli) -> Result<String, String> {
         },
         Command::Unblock { ip } => match admin(cfg, Admin::Unblock { ip: ip.clone() })? {
             AdminReply::Done => Ok(format!("Unblocked {ip}.\n")),
+            other => unexpected(other),
+        },
+        Command::Invite { admin: as_admin } => match admin(cfg, Admin::CreateInvite { admin: *as_admin })? {
+            AdminReply::Invite { code, .. } => Ok(format!(
+                "Invite code (works once, for {} days{}):
+
+  {code}
+
+In FigCraft: Home ▸ Online ▸ Sign in ▸ Have an invite? Enter this server's address and the code.
+",
+                crate::accounts::INVITE_SECS / 86_400,
+                if *as_admin { ", makes an admin" } else { "" }
+            )),
             other => unexpected(other),
         },
         Command::Blocked => match admin(cfg, Admin::Blocked)? {

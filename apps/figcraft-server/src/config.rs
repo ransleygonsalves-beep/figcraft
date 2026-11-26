@@ -80,6 +80,8 @@ pub struct Config {
     /// Where the browser build is served for this server (`https://figcraft.example.com/app/`): the
     /// team list's browser links point there. Empty: none.
     pub web_url: String,
+    /// People get in with their accounts only: share links and join codes are refused.
+    pub accounts_only: bool,
 }
 
 impl Default for Config {
@@ -113,6 +115,7 @@ impl Default for Config {
             messages_per_second: 200,
             team_files: String::new(),
             web_url: String::new(),
+            accounts_only: false,
         }
     }
 }
@@ -297,6 +300,7 @@ impl Config {
                 // `check` refused anything else before the store is made.
                 team: self.team().ok().flatten(),
                 web: self.web().unwrap_or_default(),
+                accounts_only: self.accounts_only,
                 abuse: AbuseConfig {
                     open: self.open_publish,
                     connects_per_minute: self.connects_per_minute,
