@@ -89,6 +89,10 @@ pub struct Prefs {
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
     pub online_files: Vec<online::OnlineFile>,
+    /// The servers you are signed in to, with their sessions' tokens (passwords, in effect: see
+    /// [`crate::accounts`]), most recent first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<crate::accounts::SignedIn>,
     /// The Getting started tips on the home screen were closed (Help ▸ Getting started shows them
     /// again).
     pub getting_started_dismissed: bool,
@@ -156,6 +160,7 @@ impl Default for Prefs {
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
             online_files: Vec::new(),
+            accounts: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,
             home_views: BTreeMap::new(),

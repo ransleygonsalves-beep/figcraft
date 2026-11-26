@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use figcraft_collab::code;
-use figcraft_collab::message::{Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, PluginReply, PluginReq};
+use figcraft_collab::message::{
+    Access, AccountAuth, AccountReply, AccountReq, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, PluginReply, PluginReq,
+};
 use figcraft_engine::live::{
     Bind, Event, HostInfo, HostOptions, LiveLink, NO_SESSION, NetReply, NetRequest, PageInfo, Presence, PublishOptions, Published, Resume, Role,
     SessionId, SessionInfo, Shared, WayIn,
@@ -250,6 +252,10 @@ impl LiveLink for NetLink {
         share(server, file, owner, revoke, create, &self.limits)
     }
 
+    fn account(&mut self, server: &str, auth: AccountAuth, reqs: Vec<AccountReq>) -> Result<(AccountReply, Vec<AccountReply>), String> {
+        account(server, auth, reqs, &self.limits)
+    }
+
     fn background(&mut self, job: u64, req: NetRequest) -> bool {
         let (inbox, limits) = (self.libraries.clone(), self.limits);
         let (failed, failure) = (inbox.clone(), req.failure());
@@ -259,6 +265,7 @@ impl LiveLink for NetLink {
                 NetRequest::Library { link, req } => NetReply::Library(manage::library(&link, req, &limits, CONNECT)),
                 NetRequest::Upload(o) => NetReply::Upload(upload(o, &limits)),
                 NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(hosting(&server, &file, &owner, req, &limits)),
+                NetRequest::Account { server, auth, reqs } => NetReply::Account(account(&server, auth, reqs, &limits)),
                 NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(share(&server, &file, &owner, &revoke, create, &limits)),
             };
             inbox.push(Event::Net { job, reply: Box::new(reply) });
@@ -352,6 +359,14 @@ fn upload(o: PublishOptions, limits: &NetLimits) -> Result<Published, String> {
 
 /// What the server at `server` says about its hosting, and its answer to `req` about `file` with
 /// its owner token (see [`LiveLink::hosting`]). A new link comes back whole, in place of its token.
+/// Sign in to the server at `server` (`ws://…` or `wss://…`) with `auth` and send `reqs` as that
+/// account.
+fn account(server: &str, auth: AccountAuth, reqs: Vec<AccountReq>, limits: &NetLimits) -> Result<(AccountReply, Vec<AccountReply>), String> {
+    let (endpoint, _) = Endpoint::parse(server)?;
+    // Signing in hashes the password on the server, and a publish uploads a file: the longer wait.
+    manage::account(&endpoint, auth, reqs, limits, limits.request_reply_timeout)
+}
+
 fn hosting(server: &str, file: &str, owner: &str, req: Option<Admin>, limits: &NetLimits) -> Result<(HostInfo, Option<AdminReply>), String> {
     let (endpoint, _) = Endpoint::parse(server)?;
     let (info, replies) = manage::hosting(&endpoint, file, owner, req.into_iter().collect(), limits, CONNECT)?;

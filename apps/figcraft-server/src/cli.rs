@@ -260,7 +260,7 @@ pub fn run(cli: &Cli) -> Result<String, String> {
 
   {code}
 
-In FigCraft: Home ▸ Online ▸ Sign in ▸ Have an invite? Enter this server's address and the code.
+In FigCraft: Home ▸ Online ▸ I have an invite, with this server's address and the code.
 ",
                 crate::accounts::INVITE_SECS / 86_400,
                 if *as_admin { ", makes an admin" } else { "" }

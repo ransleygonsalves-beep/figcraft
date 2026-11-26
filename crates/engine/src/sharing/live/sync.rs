@@ -307,6 +307,8 @@ impl Session {
             .collect();
         let mine = synced.and_then(|d| d.text_edit.as_ref()).map(|t| editing(&editing_of(t)));
         let (link, url) = l.invite();
+        // An account's session token never shows: it signs in as them.
+        let link = link.map(super::types::hide_account_token);
         let sessions: Vec<Value> = self
             .live
             .iter()
@@ -319,7 +321,7 @@ impl Session {
                     "reason": reason(o),
                     "role": o.role(),
                     "fileName": info.map(|i| i.file_name.as_str()),
-                    "link": o.invite().0,
+                    "link": o.invite().0.map(super::types::hide_account_token),
                     "peers": o.peers.len(),
                 })
             })

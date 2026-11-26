@@ -1,6 +1,6 @@
 use super::{
-    Access, Admin, AdminReply, Arc, ClientMsg, Code, Document, HostInfo, IpAddr, LibraryReply, LibraryReq, NO_TEAM_LIBRARIES, Peer, PluginReply,
-    PluginReq, Presence, Resume, Serialize, ServerMsg, Signal, code,
+    Access, AccountAuth, AccountReply, AccountReq, Admin, AdminReply, Arc, ClientMsg, Code, Document, HostInfo, IpAddr, LibraryReply, LibraryReq,
+    NO_TEAM_LIBRARIES, Peer, PluginReply, PluginReq, Presence, Resume, Serialize, ServerMsg, Signal, code,
 };
 
 /// The server files are shared through online unless Preferences name another: the only place
@@ -264,6 +264,20 @@ pub fn join_target(server: &str, typed: &str) -> std::result::Result<String, Str
     }
 }
 
+/// `link` with an account's session token (`token=acct-…`) cut to its prefix: the link a file was
+/// joined with is shown (to agents too), and that token signs in as the person.
+pub fn hide_account_token(link: &str) -> String {
+    let marker = format!("token={}", figcraft_collab::message::ACCOUNT_TOKEN);
+    match link.find(&marker) {
+        Some(at) => {
+            let start = at + marker.len();
+            let end = link[start..].find('&').map_or(link.len(), |i| start + i);
+            format!("{}…{}", &link[..start], &link[end..])
+        }
+        None => link.to_string(),
+    }
+}
+
 /// Why nothing can be shared or joined online.
 pub const ONLINE_OFF: &str = "online sharing is off: choose a server in Preferences (or share on the local network)";
 
@@ -334,6 +348,9 @@ pub enum NetRequest {
     /// Ask the server at `server` about its hosting and, with a file's owner token, manage that
     /// file ([`LiveLink::hosting`]).
     Hosting { server: String, file: String, owner: String, req: Option<Admin> },
+    /// Sign in to the server at `server` with `auth` (or come back with a session) and send
+    /// `reqs` as that account ([`LiveLink::account`]).
+    Account { server: String, auth: AccountAuth, reqs: Vec<AccountReq> },
 }
 
 impl NetRequest {
@@ -342,7 +359,7 @@ impl NetRequest {
         match self {
             NetRequest::Plugins { .. } => crate::plugin_directory::NO_DIRECTORY,
             NetRequest::Library { .. } | NetRequest::Upload(_) => NO_TEAM_LIBRARIES,
-            NetRequest::Hosting { .. } | NetRequest::Share { .. } => NO_HOSTING,
+            NetRequest::Hosting { .. } | NetRequest::Share { .. } | NetRequest::Account { .. } => NO_HOSTING,
         }
     }
 
@@ -354,6 +371,7 @@ impl NetRequest {
             NetRequest::Upload(_) => |why| NetReply::Upload(Err(why)),
             NetRequest::Hosting { .. } => |why| NetReply::Hosting(Err(why)),
             NetRequest::Share { .. } => |why| NetReply::Share(Err(why)),
+            NetRequest::Account { .. } => |why| NetReply::Account(Err(why)),
         }
     }
 
@@ -371,6 +389,9 @@ impl NetRequest {
             (NetRequest::Share { server: a, file: f, create: x, .. }, NetRequest::Share { server: b, file: g, create: y, .. }) => {
                 a == b && f == g && x == y
             }
+            (NetRequest::Account { server: a, reqs: x, .. }, NetRequest::Account { server: b, reqs: y, .. }) => {
+                a == b && x.len() == y.len() && x.iter().zip(y).all(|(x, y)| discriminant(x) == discriminant(y))
+            }
             _ => false,
         }
     }
@@ -386,6 +407,8 @@ pub enum NetReply {
     Upload(std::result::Result<Published, String>),
     /// What the server says about its hosting, and its answer to the request, if one was sent.
     Hosting(std::result::Result<(HostInfo, Option<AdminReply>), String>),
+    /// Who is signed in (the reply that opened the connection), then the answers to the requests.
+    Account(std::result::Result<(AccountReply, Vec<AccountReply>), String>),
 }
 
 /// What a session without the network says about servers' hosting.
@@ -508,7 +531,17 @@ pub trait LiveLink: Send {
             NetRequest::Library { link, req } => NetReply::Library(self.library(&link, req)),
             NetRequest::Upload(o) => NetReply::Upload(self.upload(o)),
             NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(self.hosting(&server, &file, &owner, req)),
+            NetRequest::Account { server, auth, reqs } => NetReply::Account(self.account(&server, auth, reqs)),
         }
+    }
+    /// Open an account connection to the server at `server` with `auth`, then send `reqs`.
+    fn account(
+        &mut self,
+        _server: &str,
+        _auth: AccountAuth,
+        _reqs: Vec<AccountReq>,
+    ) -> std::result::Result<(AccountReply, Vec<AccountReply>), String> {
+        Err(NO_HOSTING.into())
     }
     /// Send `req` on a thread of its own and return at once: the answer arrives as [`Event::Net`]
     /// with `job` (a failure to send too). False when this link can't, and nothing was sent.

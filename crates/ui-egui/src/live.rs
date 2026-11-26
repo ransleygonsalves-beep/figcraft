@@ -914,13 +914,27 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     } else if hosts && let Some(i) = widgets::segmented_text(ui, &[tr("Online"), tr("Local network")], usize::from(local)) {
         app.ui.live.local = i == 1;
     }
+    // Signed in to the server: the file goes there as yours, and you share it with people by email.
+    let account = !local && app.session.prefs.accounts.iter().any(|a| figcraft_engine::online::same_server(&a.server, &server));
+    if account {
+        widgets::label(
+            ui,
+            tr("You're signed in to this server: publish the file as yours, then share it with people from Home, under Online."),
+            t.text_secondary,
+        );
+        if widgets::button(ui, tr("Publish to your server"), true, true).clicked() {
+            app.run("account.publish", serde_json::json!({"server": server}));
+        }
+        ui.add_space(6.0);
+        widgets::label(ui, tr("Or share it with a code, without accounts:"), t.text_secondary);
+    }
     if local {
         widgets::label(ui, tr("People on your network join with a code. Nothing goes through a server."), t.text_secondary);
         local_access_choice(app, ui);
     } else {
         online_note(app, ui, t, &server);
     }
-    if widgets::button(ui, tr("Start sharing"), true, true).clicked() {
+    if widgets::button(ui, tr("Start sharing"), !account, true).clicked() {
         start_sharing(app, local, &server);
     }
     join_and_advanced(app, ui, t, |app, ui, t| share_advanced(app, ui, t, local, &server));

@@ -15,6 +15,7 @@ use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets;
+pub mod accounts;
 pub mod home_recents;
 pub mod online;
 
