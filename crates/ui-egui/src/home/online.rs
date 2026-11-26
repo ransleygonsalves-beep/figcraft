@@ -106,6 +106,11 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
             tr("The files you shared or published online from this computer. They stay on their server until you remove them."),
             t.text_secondary,
         );
+        ui.add_space(6.0);
+        crate::accounts::section(app, ui, t);
+        ui.add_space(10.0);
+        widgets::separator(ui);
+        ui.add_space(6.0);
         status(app, ui, t);
         if let Some(session) = app.ui.live.home_join {
             crate::live::join_status(app, ui, t, session);

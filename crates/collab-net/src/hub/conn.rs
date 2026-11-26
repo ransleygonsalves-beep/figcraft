@@ -279,7 +279,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
                 | ClientMsg::OpenPlugins(_)
                 | ClientMsg::OpenHosting(_)
                 | ClientMsg::Resolve(_)
-                | ClientMsg::ResolveTeam(_)),
+                | ClientMsg::ResolveTeam(_)
+                | ClientMsg::OpenAccount(_)),
                 bytes,
             ))) => {
                 // Sessions and the operator may use the last connections; one-shot requests
@@ -289,7 +290,7 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
                 // while to receive and answer. The manage/hosting connections that carry uploads
                 // wait the longer request-reply timeout, not the short request idle.
                 let idle = match first {
-                    ClientMsg::Manage(_) | ClientMsg::OpenHosting(_) => limits.request_reply_timeout,
+                    ClientMsg::Manage(_) | ClientMsg::OpenHosting(_) | ClientMsg::OpenAccount(_) => limits.request_reply_timeout,
                     ClientMsg::Hello(_) => limits.idle_timeout,
                     _ => limits.request_idle,
                 };

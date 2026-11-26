@@ -313,5 +313,7 @@ pub(crate) fn background(job: u64, req: NetRequest) -> Option<Next> {
             }
         },
         NetRequest::Upload(_) => return None,
+        // Signing in to a server works in the desktop app for now.
+        NetRequest::Account { .. } => answer(NetReply::Account(Err("signing in to a server works in the desktop app for now".into()))),
     })
 }

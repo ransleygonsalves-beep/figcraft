@@ -1,9 +1,18 @@
 use super::journal::flush_log;
 use super::team::team_admits;
 use super::{
-    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, IpAddr, LibraryReply,
-    LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
+    ACCOUNT_TOKEN, Access, AccountAuth, AccountHandled, AccountReply, AccountReq, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS,
+    Backend, ClientMsg, Closing, Handled, HostInfo, InviteInfo, IpAddr, LibraryReply, LibraryReq, OpenFile, OpenedAccount, PluginReply, PluginReq,
+    Server, Store, disk, hash, now, same_secret,
 };
+
+/// What a used, withdrawn or made-up invite code says.
+const INVITE_GONE: &str = "this invite doesn't work: it was used, withdrawn or is too old; ask for a new one";
+
+/// Whether an account request changes something (counted against the address's budget).
+fn account_changes(req: &AccountReq) -> bool {
+    !matches!(req, AccountReq::Me | AccountReq::Files | AccountReq::Members { .. } | AccountReq::Invites | AccountReq::Users)
+}
 
 /// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
 /// such requests count against the address's budget ([`Action::Admin`]); looking doesn't.
@@ -18,6 +27,7 @@ fn changes_files(req: &Admin) -> bool {
             | Admin::Owned { .. }
             | Admin::RemovePeer { .. }
             | Admin::Team
+            | Admin::CreateInvite { .. }
     )
 }
 
@@ -38,10 +48,18 @@ impl Store {
 
 impl Backend for Store {
     fn admit(&mut self, file: &str, token: &str) -> Result<Admission, String> {
+        if let Some(session) = token.strip_prefix(ACCOUNT_TOKEN) {
+            let (_, user) = self.account_session(session).ok_or("you were signed out of this server: sign in again")?;
+            let access = self.access_of(&user, file).ok_or("this file isn't shared with your account: ask its owner")?;
+            return Ok(Admission { access, link: None, account: Some((user.id, user.name)) });
+        }
+        if self.accounts_only() {
+            return Err("this server lets people in with their accounts only: sign in to open its files".into());
+        }
         let team = self.cfg.hosting.team;
         let entry = self.entry(file)?;
         let link = Self::link_of(entry, token).filter(|&i| team_admits(team, entry, i)).and_then(|i| entry.links.get(i));
-        link.map(|l| Admission { access: l.access, link: Some(l.id.clone()) })
+        link.map(|l| Admission { access: l.access, link: Some(l.id.clone()), account: None })
             .ok_or_else(|| "this link isn't valid (it may have been revoked)".to_string())
     }
 
@@ -239,6 +257,9 @@ impl Backend for Store {
             Admin::Code { file, token } => self.set_code(&file, &token).map_or_else(failed, |code| AdminReply::Code { code }.into()),
             Admin::Owned { files } => self.owned(&files).into(),
             Admin::Team => self.team(open).into(),
+            Admin::CreateInvite { admin } => {
+                self.accounts.create_invite(admin).map_or_else(failed, |(id, code)| AdminReply::Invite { id, code }.into())
+            }
             // The hub removes people itself (it knows who is connected); it never asks the store.
             Admin::RemovePeer { .. } => failed("removing someone from a file is done by the server's hub".into()),
             Admin::Remove { file } => {
@@ -300,6 +321,91 @@ impl Backend for Store {
 
     fn resolve_team(&mut self, _ip: IpAddr, file: &str) -> Result<String, String> {
         self.team_link(file).map(|l| l.token)
+    }
+
+    fn open_account(&mut self, ip: IpAddr, auth: AccountAuth) -> Result<OpenedAccount, String> {
+        let signed = match auth {
+            AccountAuth::Session { token } => {
+                let (session, user) = self.account_session(&token).ok_or("you were signed out of this server: sign in again")?;
+                return Ok(OpenedAccount { user: user.id, session, reply: AccountReply::SignedIn { token, user } });
+            }
+            AccountAuth::Password { email, password } => self.guessed(ip, |s| s.accounts.sign_in(&email, &password))?,
+            AccountAuth::Invite { code, email, name, password } => {
+                // A wrong code is counted as a wrong guess; a right one with details to fix isn't.
+                let open = self.guessed(ip, |s| if s.accounts.invite_open(&code) { Ok(()) } else { Err(INVITE_GONE.into()) });
+                open?;
+                self.accounts.redeem(&code, &email, &name, &password)?
+            }
+        };
+        log::info!("event=signed_in user={} ip={ip}", signed.user.id);
+        Ok(OpenedAccount { user: signed.user.id, session: signed.session, reply: AccountReply::SignedIn { token: signed.token, user: signed.user } })
+    }
+
+    fn account(&mut self, ip: IpAddr, user: u64, session: &str, req: AccountReq, _open: &dyn Fn(&str) -> Option<OpenFile>) -> AccountHandled {
+        let Some(me) = self.accounts.user(user).filter(|u| !u.disabled) else {
+            return AccountHandled { signed_out: vec![user], ..AccountReply::Failed { reason: "you were signed out of this server".into() }.into() };
+        };
+        let failed = |reason: String| AccountHandled::from(AccountReply::Failed { reason });
+        let admin_only = || failed("only an admin can do that".into());
+        if account_changes(&req) && !self.abuse.allow(ip, Action::Admin, self.clock()) {
+            return failed(BUSY_ADMIN.into());
+        }
+        match req {
+            AccountReq::Me => AccountReply::Me(me).into(),
+            AccountReq::SignOut => {
+                self.accounts.sign_out(session).map_or_else(failed, |()| AccountHandled { signed_out: Vec::new(), ..AccountReply::Done.into() })
+            }
+            AccountReq::Files => AccountReply::Files(self.account_files(&me)).into(),
+            AccountReq::Members { file } => self.members(&me, &file).map_or_else(failed, |m| AccountReply::Members(m).into()),
+            AccountReq::SetMember { file, email, access } => match self.set_member(&me, &file, &email, access) {
+                Ok(()) => AccountHandled { members_changed: vec![file], ..AccountReply::Done.into() },
+                Err(e) => failed(e),
+            },
+            AccountReq::Publish { name, snapshot } => {
+                self.publish_account(&me, &name, &snapshot).map_or_else(failed, |file| AccountReply::Published { file }.into())
+            }
+            AccountReq::RenameFile { file, name } => match self.account_manages(&me, &file) {
+                Ok(()) => self.rename(&file, &name).map_or_else(failed, |()| AccountReply::Done.into()),
+                Err(e) => failed(e),
+            },
+            AccountReq::RemoveFile { file } => match self.account_manages(&me, &file).and_then(|()| self.remove(&file)) {
+                Ok(()) => AccountHandled { removed: Some(file), ..AccountReply::Done.into() },
+                Err(e) => failed(e),
+            },
+            AccountReq::ChangePassword { old, new } => {
+                let others = self.accounts.change_password(user, session, &old, &new);
+                others.map_or_else(failed, |()| AccountHandled { signed_out: Vec::new(), ..AccountReply::Done.into() })
+            }
+            _ if !me.admin => admin_only(),
+            AccountReq::CreateInvite { admin } => {
+                self.accounts.create_invite(admin).map_or_else(failed, |(id, code)| AccountReply::Invite { id, code }.into())
+            }
+            AccountReq::Invites => {
+                let shown = |(id, admin, created, expires): (String, bool, u64, u64)| InviteInfo {
+                    id,
+                    admin,
+                    created: i64::try_from(created).unwrap_or(i64::MAX),
+                    expires: i64::try_from(expires).unwrap_or(i64::MAX),
+                };
+                AccountReply::Invites(self.accounts.invites().into_iter().map(shown).collect()).into()
+            }
+            AccountReq::RevokeInvite { id } => self.accounts.revoke_invite(&id).map_or_else(failed, |()| AccountReply::Done.into()),
+            AccountReq::Users => AccountReply::Users(self.accounts.users()).into(),
+            AccountReq::SetUser { id, admin, disabled } => match self.accounts.set_user(user, id, admin, disabled) {
+                // Whoever was disabled is disconnected; a changed role is checked again in every file.
+                Ok(()) => {
+                    let signed_out = if disabled == Some(true) { vec![id] } else { Vec::new() };
+                    let members_changed = if admin.is_some() { self.files.keys().cloned().collect() } else { Vec::new() };
+                    AccountHandled { signed_out, members_changed, ..AccountReply::Done.into() }
+                }
+                Err(e) => failed(e),
+            },
+        }
+    }
+
+    fn account_access(&mut self, user: u64, file: &str) -> Option<Access> {
+        let user = self.accounts.user(user)?;
+        self.access_of(&user, file)
     }
 
     fn closing(&self) -> Closing {

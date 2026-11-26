@@ -9,6 +9,7 @@
 //! links are the access, and the server key manages files.
 
 pub mod abuse;
+pub mod accounts;
 pub mod cli;
 pub mod codes;
 pub mod config;
@@ -86,6 +87,10 @@ pub fn start(cfg: &Config) -> Result<Running, String> {
     Ok(Running { hosting })
 }
 
+#[cfg(test)]
+mod accounts_server_tests;
+#[cfg(test)]
+mod accounts_tests;
 #[cfg(test)]
 mod admin_budget_tests;
 #[cfg(test)]

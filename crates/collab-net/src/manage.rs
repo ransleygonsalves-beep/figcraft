@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use figcraft_collab::message::{
-    self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply,
-    PluginReq, ServerMsg,
+    self, AccountAuth, AccountReply, AccountReq, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenAccount, OpenHosting,
+    OpenLibrary, OpenPlugins, PROTOCOL, PluginReply, PluginReq, ServerMsg,
 };
 use figcraft_engine::live::Shared;
 use tungstenite::{Bytes, Message, WebSocket};
@@ -20,6 +20,35 @@ pub(crate) use crate::requests::REFUSED;
 use crate::requests::{code_requests, comment_request, directory_error, hosting_error, link_requests, made_comment, made_links, shared};
 
 type Ws = WebSocket<Duplex>;
+
+/// Open an account connection to the server at `server` with `auth` (signing in, a session's
+/// token, or an invite), then send `requests` as that account: the reply that opened it (who is
+/// signed in, with the session's token), then the replies, in order. Fails when the server can't
+/// be reached or refuses (a wrong password, an ended session, a used invite, a server older than
+/// accounts); a request it can't do is an [`AccountReply::Failed`] reply. Never echoes secrets.
+pub fn account(
+    server: &Endpoint,
+    auth: AccountAuth,
+    requests: Vec<AccountReq>,
+    limits: &NetLimits,
+    timeout: Duration,
+) -> Result<(AccountReply, Vec<AccountReply>), String> {
+    let pick = |m: ServerMsg| match m {
+        ServerMsg::Account(r) => Some(*r),
+        _ => None,
+    };
+    let mut ws = connect(server, limits, timeout)?;
+    send(&mut ws, &ClientMsg::OpenAccount(OpenAccount { protocol: PROTOCOL, client_version: message::client_version(), auth }))?;
+    let opened = reply(&mut ws, limits, pick)
+        .map_err(|e| if e.contains("couldn't be read") { "this server is older than accounts: it has no sign-in".to_string() } else { e })?;
+    let mut replies = Vec::with_capacity(requests.len());
+    for r in requests {
+        send(&mut ws, &ClientMsg::Account(r))?;
+        replies.push(reply(&mut ws, limits, pick)?);
+    }
+    close(ws);
+    Ok((opened, replies))
+}
 
 /// Send `requests` to the server at `server` with its `key`; the replies, in order. Fails when the
 /// server can't be reached, refuses the key or closes the connection (a request it can't do is a

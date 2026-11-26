@@ -30,6 +30,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 crc32fast = { workspace = true }
+# Account passwords, kept as Argon2id hashes (the PHC string form).
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc", "password-hash"] }
 toml = "1"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 # Stopping gracefully on SIGTERM/SIGINT/SIGHUP (systemd, Docker, Ctrl+C) and Ctrl+C/close on Windows.
