@@ -563,7 +563,7 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                 }
                 if crop && let Some(at) = entries.iter().position(|e| e.1 == "object.mask") {
                     entries.insert(at + 1, (tr("Crop image"), "image.crop"));
-                    entries.insert(at + 2, (tr("Vectorize image"), "image.vectorize"));
+                    entries.insert(at + 2, (tr("Vectorize image…"), "image.vectorizePreview"));
                 }
                 // An instance's actions reach its main component: replace "Create component" with
                 // "Go to main component" (as in Figma's context menu).

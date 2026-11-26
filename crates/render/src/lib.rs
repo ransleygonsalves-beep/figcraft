@@ -694,3 +694,24 @@ mod stroke_reach_tests;
 mod tests;
 #[cfg(test)]
 mod width_tests;
+
+/// The most pixels [`fill_paths`] draws (2048 × 2048).
+const MAX_FILL_PIXELS: u64 = 2048 * 2048;
+
+/// Shapes filled in their colours, bottom to top, over a transparent `width` × `height` image
+/// (non-zero winding, anti-aliased), each path in pixel units: a quick picture of traced shapes
+/// (Vectorize image's preview). `None` when the size is empty or past 2048 × 2048 pixels.
+pub fn fill_paths(width: u32, height: u32, shapes: &[(&figcraft_geom::BezPath, [u8; 3])]) -> Option<Pixmap> {
+    if u64::from(width) * u64::from(height) > MAX_FILL_PIXELS {
+        return None;
+    }
+    let mut pix = Pixmap::new(width, height)?;
+    for (path, [r, g, b]) in shapes {
+        let Some(p) = ts_path(path) else { continue };
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(*r, *g, *b, 255);
+        paint.anti_alias = true;
+        pix.fill_path(&p, &paint, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+    }
+    Some(pix)
+}

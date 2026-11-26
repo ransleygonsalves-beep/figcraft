@@ -240,6 +240,7 @@ impl FigApp {
                 "contextMenu" => self.ui.key_menu = true,
                 "selectArea" => self.start_key_box(),
                 "image.vectorize" => crate::vectorize_progress::request(self, &r.data),
+                "dialog.vectorize" => crate::vectorize_options::request(self, &r.data),
                 "image.crop" => {
                     // Crop mode takes the canvas: an open colour picker would edit the same paint.
                     self.ui.picker = None;
