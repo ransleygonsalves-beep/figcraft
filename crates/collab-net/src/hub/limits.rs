@@ -7,6 +7,9 @@ pub struct Admission {
     /// The link's id, when the backend has several per file (revoking it disconnects whoever
     /// joined with it).
     pub link: Option<String>,
+    /// Joined with an account's session: the account's id and name (shown on their cursor and
+    /// comments, whatever name the hello gave).
+    pub account: Option<(u64, String)>,
 }
 
 /// The address limits and blocks count a client by: its IPv4 address (an IPv4-mapped IPv6 address

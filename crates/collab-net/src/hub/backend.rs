@@ -1,5 +1,8 @@
 use super::limits::Admission;
-use super::{Access, Admin, AdminReply, ClientMsg, HostInfo, IpAddr, LibraryReply, LibraryReq, PluginReply, PluginReq, Server};
+use super::{
+    Access, AccountAuth, AccountReply, AccountReq, Admin, AdminReply, ClientMsg, HostInfo, IpAddr, LibraryReply, LibraryReq, PluginReply, PluginReq,
+    Server,
+};
 
 /// An admin request's reply, and what the hub must do about connections it affects.
 #[derive(Clone, Debug, PartialEq)]
@@ -16,6 +19,36 @@ pub struct Handled {
 impl From<AdminReply> for Handled {
     fn from(reply: AdminReply) -> Self {
         Self { reply, revoked: Vec::new(), removed: None, blocked: None }
+    }
+}
+
+/// An account connection the backend let in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenedAccount {
+    /// The account's id.
+    pub user: u64,
+    /// The session's id (its token's hash): what signing out ends.
+    pub session: String,
+    /// What opens the connection ([`AccountReply::SignedIn`]).
+    pub reply: AccountReply,
+}
+
+/// An account request's reply, and what the hub must do about connections it affects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccountHandled {
+    pub reply: AccountReply,
+    /// Files whose members changed: whoever joined them with an account is checked again
+    /// ([`Backend::account_access`]) and disconnected when they may no longer open it.
+    pub members_changed: Vec<String>,
+    /// A file was removed: whoever is in it is disconnected and it is closed without saving.
+    pub removed: Option<String>,
+    /// Accounts whose sessions ended (disabled, or a password change): their connections close.
+    pub signed_out: Vec<u64>,
+}
+
+impl From<AccountReply> for AccountHandled {
+    fn from(reply: AccountReply) -> Self {
+        Self { reply, members_changed: Vec::new(), removed: None, signed_out: Vec::new() }
     }
 }
 
@@ -138,6 +171,25 @@ pub trait Backend: Send + 'static {
     /// (shown to them).
     fn resolve_team(&mut self, _ip: IpAddr, _file: &str) -> Result<String, String> {
         Err("this session is hosted by an app: it has no team list".into())
+    }
+
+    /// An account connection from `ip` says who it is: the account's id and the reply that opens
+    /// the connection ([`AccountReply::SignedIn`]), or why it may not (shown to them; wrong
+    /// passwords and codes are counted against the address).
+    fn open_account(&mut self, _ip: IpAddr, _auth: AccountAuth) -> Result<OpenedAccount, String> {
+        Err("this session is hosted by an app: accounts live on a figcraft-server".into())
+    }
+
+    /// A request on an account connection from `ip`, signed in as `user` with session `session`
+    /// (its token's hash); `open` tells about a file that is open.
+    fn account(&mut self, _ip: IpAddr, _user: u64, _session: &str, _req: AccountReq, _open: &dyn Fn(&str) -> Option<OpenFile>) -> AccountHandled {
+        AccountReply::Failed { reason: "accounts live on a figcraft-server".into() }.into()
+    }
+
+    /// What the account `user` may do in `file` now (asked after a change of who may open it): its
+    /// level, or `None` when it may no longer open it.
+    fn account_access(&mut self, _user: u64, _file: &str) -> Option<Access> {
+        None
     }
 
     /// What everyone is told when the hub stops.

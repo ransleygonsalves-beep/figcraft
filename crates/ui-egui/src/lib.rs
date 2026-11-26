@@ -362,6 +362,7 @@ pub use dialogs::updates_ui;
 pub use dialogs::variables_panel;
 pub use dialogs::vectorize_options;
 pub use dialogs::vectorize_progress;
+pub use home::accounts;
 pub use home::home_recents;
 pub use home::online;
 pub use panels::assets_panel;
@@ -675,6 +676,8 @@ pub struct UiState {
     pub live: live::LiveUi,
     /// Home ▸ Online.
     pub online: online::OnlineUi,
+    /// Home ▸ Online ▸ Your team's server: signing in, the files shared with you, sharing.
+    pub account: accounts::AccountUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
     /// A tab was asked to close with unsaved changes: the question for it, then its save.
@@ -810,6 +813,7 @@ impl Default for UiState {
             plugin_form: None,
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
+            account: accounts::AccountUi::default(),
             confirm_close: false,
             close_tab: None,
             close_after_save_as: None,

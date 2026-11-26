@@ -81,6 +81,7 @@ pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
 pub use selection::tidy;
+pub use sharing::accounts;
 pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;

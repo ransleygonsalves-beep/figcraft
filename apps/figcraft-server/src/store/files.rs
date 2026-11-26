@@ -118,8 +118,18 @@ impl Store {
         let (edit, edit_token) = new_link(Access::Edit, "Published (edit)", t)?;
         let (view, view_token) = new_link(Access::View, "Published (view)", t)?;
         let owner = ip.map(|_| token::secret()).transpose()?;
-        let meta =
-            Meta { name, created: t, updated: t, seq: 0, library: None, owner: owner.as_deref().map(hash), ip: ip.map(|i| i.to_string()), opened: 0 };
+        let meta = Meta {
+            name,
+            created: t,
+            updated: t,
+            seq: 0,
+            library: None,
+            owner: owner.as_deref().map(hash),
+            ip: ip.map(|i| i.to_string()),
+            opened: 0,
+            account_owner: None,
+            members: std::collections::BTreeMap::new(),
+        };
         let dir = self.dir(&id);
         let written = fs::create_dir_all(&dir)
             .map_err(|e| e.to_string())

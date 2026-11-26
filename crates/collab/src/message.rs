@@ -391,6 +391,9 @@ pub enum Admin {
     /// [`AdminReply::Team`]; they are joined with [`ResolveTeam`]. Servers older than this request
     /// can't read it.
     Team,
+    /// A one-time invite that makes an account (an admin one when `admin`), as the operator
+    /// asks with the key: how the first admin gets in. Servers older than accounts can't read it.
+    CreateInvite { admin: bool },
 }
 
 /// The most files an [`AdminReply::Team`] lists (the most recently changed ones).
@@ -516,6 +519,11 @@ pub enum AdminReply {
     Team {
         web: String,
         files: Vec<TeamFile>,
+    },
+    /// The answer to [`Admin::CreateInvite`]: its id and the one-time code (shown once).
+    Invite {
+        id: String,
+        code: String,
     },
 }
 
@@ -866,6 +874,12 @@ pub enum ClientMsg {
     /// Ask for the link of a file on the server's team list (the first message on a connection,
     /// instead of `Hello`).
     ResolveTeam(ResolveTeam),
+    /// Sign in to the server's accounts, or come back with a session (the first message on a
+    /// connection, instead of `Hello`). Answered with [`ServerMsg::Account`]
+    /// ([`AccountReply::SignedIn`]) or `Refused`; a server older than accounts can't read it.
+    OpenAccount(OpenAccount),
+    /// A request on an account connection.
+    Account(AccountReq),
 }
 
 /// Server → client.
@@ -936,6 +950,138 @@ pub enum ServerMsg {
     Resolved {
         file: String,
         token: String,
+    },
+    /// The answer to [`ClientMsg::OpenAccount`] and to each [`ClientMsg::Account`] request.
+    Account(Box<AccountReply>),
+}
+
+/// What a [`Hello::token`] starts with when it is an account's session token rather than a link's:
+/// the server admits the person by the files shared with their account, and names them by it.
+pub const ACCOUNT_TOKEN: &str = "acct-";
+
+/// How an account connection says who it is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountAuth {
+    /// Sign in: a new session.
+    Password { email: String, password: String },
+    /// Come back with the token of a session signed in earlier.
+    Session { token: String },
+    /// Make an account with a one-time invite code (from an admin), and sign in to it.
+    Invite { code: String, email: String, name: String, password: String },
+}
+
+/// Opens an account connection (the first message on a connection, instead of [`Hello`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpenAccount {
+    pub protocol: u32,
+    pub client_version: String,
+    pub auth: AccountAuth,
+}
+
+/// A request on an account connection, made as the account it was opened with.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountReq {
+    /// Who the connection is signed in as.
+    Me,
+    /// End this session: its token no longer opens anything.
+    SignOut,
+    /// The files this account may open (an admin: every file).
+    Files,
+    /// Who may open `file` (its owner or an admin asks).
+    Members { file: String },
+    /// Let the account with `email` open `file` with `access`, or (`None`) no longer (its owner or
+    /// an admin asks); whoever loses access is disconnected.
+    SetMember { file: String, email: String, access: Option<Access> },
+    /// Keep a new file on the server, owned by this account.
+    Publish { name: String, snapshot: Vec<Change> },
+    /// A one-time code that makes an account (an admin asks); `admin`: the account will be one.
+    CreateInvite { admin: bool },
+    /// The invites not used yet (an admin asks).
+    Invites,
+    /// Withdraw an invite (an admin asks).
+    RevokeInvite { id: String },
+    /// Every account (an admin asks).
+    Users,
+    /// Make an account an admin or not, or disable it (its sessions end) or enable it again (an
+    /// admin asks; an admin can't change their own).
+    SetUser { id: u64, admin: Option<bool>, disabled: Option<bool> },
+    /// Change this account's password (the old one, then the new); its other sessions end.
+    ChangePassword { old: String, new: String },
+    /// Rename `file` (its owner or an admin asks).
+    RenameFile { file: String, name: String },
+    /// Delete `file` from the server (its owner or an admin asks); whoever is in it is disconnected.
+    RemoveFile { file: String },
+}
+
+/// An account as the server shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountUser {
+    pub id: u64,
+    pub email: String,
+    pub name: String,
+    pub admin: bool,
+    pub disabled: bool,
+}
+
+/// A file an account may open.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountFile {
+    pub file: String,
+    pub name: String,
+    pub access: Access,
+    /// This account owns it (it may share, rename and delete it).
+    pub owner: bool,
+    /// When it last changed (Unix seconds).
+    pub updated: i64,
+}
+
+/// Someone who may open a file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Member {
+    pub user: u64,
+    pub email: String,
+    pub name: String,
+    pub access: Access,
+    pub owner: bool,
+}
+
+/// An invite not used yet (never its code).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InviteInfo {
+    pub id: String,
+    pub admin: bool,
+    /// When it was made and when it stops working (Unix seconds).
+    pub created: i64,
+    pub expires: i64,
+}
+
+/// The answer to an account connection's opening or request.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountReply {
+    /// Signed in: the session's token (keep it to come back) and who.
+    SignedIn {
+        token: String,
+        user: AccountUser,
+    },
+    Me(AccountUser),
+    Files(Vec<AccountFile>),
+    Members(Vec<Member>),
+    Published {
+        file: String,
+    },
+    /// A new invite: its id and the one-time code (shown once; the server keeps only its hash).
+    Invite {
+        id: String,
+        code: String,
+    },
+    Invites(Vec<InviteInfo>),
+    Users(Vec<AccountUser>),
+    Done,
+    Failed {
+        reason: String,
     },
 }
 
