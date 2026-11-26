@@ -3,6 +3,7 @@
 //! directory, publish code connect mappings to a design file and measure performance.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod account;
 mod args;
 mod files;
 mod perf;
@@ -10,7 +11,7 @@ mod perf;
 use std::io::Write;
 use std::process::ExitCode;
 
-use args::{Cli, Command, ConnectCommand, PluginCommand, RootArgs};
+use args::{AccountCommand, Cli, Command, ConnectCommand, PluginCommand, RootArgs};
 use serde_json::{Value, json};
 
 /// The automation roots a file subcommand was given, if any. Omitting both leaves the run
@@ -66,6 +67,12 @@ impl From<String> for CliError {
     }
 }
 
+impl From<&str> for CliError {
+    fn from(s: &str) -> Self {
+        CliError::Failed(s.to_string())
+    }
+}
+
 pub type CliResult<T> = Result<T, CliError>;
 
 fn run(cli: Cli) -> CliResult<ExitCode> {
@@ -95,6 +102,11 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
         Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?),
         Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server),
         Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
+        Command::Account { command } => match command {
+            AccountCommand::Login(a) => account::login(a.server.as_deref(), a.email.as_deref(), &a.access, &a.label),
+            AccountCommand::Logout => account::logout(),
+            AccountCommand::Status => account::status(),
+        },
         Command::Perf(a) => {
             let sizes: Vec<usize> = a.layers.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
             let instances: Vec<usize> = a.instances.into_iter().filter(|n| *n > 0).map(|n| n.min(100_000)).collect();
@@ -159,7 +171,16 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
                 None => Box::new(b),
             }
         }
-        None => Box::new(figcraft_mcp::Headless::new()),
+        None => {
+            // Signed in to your team's server as `account login` (or FIGCRAFT_TOKEN) says: the
+            // `account.*` and `collab.*` commands use it with no parameters. Never the token shown.
+            let creds = account::credentials();
+            if let Some(c) = &creds {
+                eprintln!("signed in to {} with {}", c.server, c.from);
+            }
+            let session = account::session_with(creds.as_ref());
+            Box::new(figcraft_mcp::Headless::with_session(session))
+        }
     };
     eprintln!("figcraft MCP server ({}) on stdio", backend.describe());
     if let Some(r) = &roots {

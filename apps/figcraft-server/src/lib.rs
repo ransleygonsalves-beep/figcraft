@@ -10,6 +10,7 @@
 
 pub mod abuse;
 pub mod accounts;
+pub mod audit;
 pub mod cli;
 pub mod codes;
 pub mod config;

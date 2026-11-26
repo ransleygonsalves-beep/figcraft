@@ -44,11 +44,13 @@ pub struct AccountHandled {
     pub removed: Option<String>,
     /// Accounts whose sessions ended (disabled, or a password change): their connections close.
     pub signed_out: Vec<u64>,
+    /// Sessions that ended (by their id: an agent token ended): their connections close.
+    pub ended: Vec<String>,
 }
 
 impl From<AccountReply> for AccountHandled {
     fn from(reply: AccountReply) -> Self {
-        Self { reply, members_changed: Vec::new(), removed: None, signed_out: Vec::new() }
+        Self { reply, members_changed: Vec::new(), removed: None, signed_out: Vec::new(), ended: Vec::new() }
     }
 }
 

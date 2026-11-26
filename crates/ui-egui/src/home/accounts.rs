@@ -1,7 +1,8 @@
 //! Home ▸ Online ▸ Your team's server: signing in to the server in Preferences with an account
 //! (or making one with an admin's invite), the files shared with you (a row opens one under your
-//! account's name), sharing a file you own with people by email, and, for admins, the accounts on
-//! the server and invites. Every action runs an `account.*` command in the background; the
+//! account's name), sharing a file you own with people by email, tokens for agents (an AI
+//! assistant acting for you with limited access), and, for admins, the accounts on the server,
+//! invites and password resets. Every action runs an `account.*` command in the background; the
 //! server's refusals show as they do for other commands.
 
 use egui::{Id, RichText, Ui};
@@ -18,10 +19,12 @@ const FIELD_W: f32 = 280.0;
 /// The access levels a member can have, as `account.share` names them.
 const LEVELS: [&str; 3] = ["edit", "comment", "view"];
 
-/// The sign-in form: with an invite code (making an account) or not.
+/// The sign-in form: with an invite code (making an account), with a reset code (choosing a new
+/// password), or neither.
 #[derive(Clone, Debug, Default)]
 pub struct Form {
     pub invite: bool,
+    pub reset: bool,
     pub server: String,
     pub email: String,
     pub password: String,
@@ -52,8 +55,22 @@ pub struct AccountUi {
     pub invite: Option<(String, bool)>,
     /// The next invite makes an admin.
     pub invite_admin: bool,
+    /// The last password reset code made: whose (name) and the code.
+    pub reset: Option<(String, String)>,
+    /// The Tokens for agents window.
+    pub agents: Option<AgentsUi>,
     /// The frame the section last drew in (it asks for the files again after a gap).
     drawn: Option<u64>,
+}
+
+/// The Tokens for agents window: your tokens (`None` while asked), the next one's label and
+/// access, and the token just made (shown once).
+#[derive(Clone, Debug, Default)]
+pub struct AgentsUi {
+    pub list: Option<Vec<Value>>,
+    pub label: String,
+    pub access: String,
+    pub made: Option<String>,
 }
 
 /// The server the account part is about: the one in Preferences.
@@ -102,6 +119,9 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
                 if widgets::button(ui, tr("I have an invite"), false, true).clicked() {
                     app.ui.account.form = Some(Form { invite: true, server: server.clone(), ..Form::default() });
                 }
+                if widgets::button(ui, tr("I have a reset code"), false, true).clicked() {
+                    app.ui.account.form = Some(Form { reset: true, server: server.clone(), ..Form::default() });
+                }
             });
         }
         Some((name, email, admin)) => signed_in_ui(app, ui, t, &server, (&name, &email, admin)),
@@ -109,6 +129,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     form(app, &ctx, t);
     share_dialog(app, &ctx, t);
     people(app, &ctx, t);
+    agents(app, &ctx, t);
 }
 
 fn signed_in_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, server: &str, (name, email, admin): (&str, &str, bool)) {
@@ -122,6 +143,10 @@ fn signed_in_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, server: &str, (name, 
         if admin && widgets::button(ui, tr("People and invites"), false, true).clicked() {
             app.ui.account.people = Some(None);
             ask_people(app, &ctx);
+        }
+        if widgets::button(ui, tr("Tokens for agents"), false, true).clicked() {
+            app.ui.account.agents = Some(AgentsUi { access: "edit".into(), ..AgentsUi::default() });
+            ask_agents(app, &ctx);
         }
         if widgets::button(ui, tr("Sign out"), false, true).clicked() {
             app.run_background(&ctx, "account.signOut", json!({"server": server}), Box::new(|app, _, _| app.ui.account.files = None));
@@ -186,6 +211,114 @@ fn ask_members(app: &mut FigApp, ctx: &egui::Context, file: &str) {
     );
 }
 
+fn ask_agents(app: &mut FigApp, ctx: &egui::Context) {
+    let params = json!({"server": server(app)});
+    app.run_background(
+        ctx,
+        "account.agentTokens",
+        params,
+        Box::new(|app, _, v| {
+            if let Some(a) = app.ui.account.agents.as_mut() {
+                a.list = Some(v["tokens"].as_array().cloned().unwrap_or_default());
+            }
+        }),
+    );
+}
+
+/// Days from now until `expires` (Unix seconds), at least 0.
+fn days_left(expires: i64) -> i64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    (expires - now).max(0) / 86_400
+}
+
+/// The Tokens for agents window: what a token lets an agent do, yours with End, and making one.
+fn agents(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
+    let Some(mut a) = app.ui.account.agents.take() else { return };
+    let mut open = true;
+    let (mut end, mut make) = (None, false);
+    crate::dialogs::window(tr("Tokens for agents"), ctx).open(&mut open).show(ctx, |ui| {
+        ui.set_width(FIELD_W + 160.0);
+        widgets::label(
+            ui,
+            tr("A token lets an AI agent, such as Claude, work in your files for you: it opens them with at most the access you choose, shows as acting for you, can't share, manage people or delete, and ends after 30 days."),
+            t.text_secondary,
+        );
+        ui.add_space(6.0);
+        match &a.list {
+            None => widgets::label(ui, tr("Asking the server…"), t.text_secondary),
+            Some(list) if list.is_empty() => widgets::label(ui, tr("You have no tokens for agents."), t.text_secondary),
+            Some(list) => {
+                for tok in list {
+                    let (id, label) = (tok["id"].as_str().unwrap_or_default(), tok["label"].as_str().unwrap_or_default());
+                    let ends = trf("{access} · ends in {days} days", &[
+                        ("access", &level(tok["access"].as_str().unwrap_or_default())),
+                        ("days", &days_left(tok["expires"].as_i64().unwrap_or(0)).to_string()),
+                    ]);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(label).color(t.text));
+                        ui.label(RichText::new(ends).font(regular(11.0)).color(t.text_secondary));
+                        if widgets::button(ui, &trf("End {name}", &[("name", &label)]), false, true).clicked() {
+                            end = Some(id.to_string());
+                        }
+                    });
+                }
+            }
+        }
+        ui.add_space(8.0);
+        widgets::separator(ui);
+        ui.add_space(6.0);
+        widgets::label(ui, tr("Make a token"), t.text);
+        ui.horizontal(|ui| {
+            if let Some(v) = widgets::text_field_named(ui, Id::unique("agent_label"), &a.label, FIELD_W - 60.0, tr("Name (Claude)")) {
+                a.label = v;
+            }
+            let options: Vec<String> = LEVELS.iter().map(|l| level(l)).collect();
+            if let Some(picked) = widgets::combo_field(ui, Id::unique("agent_access"), &level(&a.access), 130.0, &options)
+                && let Some(i) = options.iter().position(|o| *o == picked)
+            {
+                a.access = LEVELS[i].to_string();
+            }
+        });
+        make = widgets::button(ui, tr("Make a token"), true, true).clicked();
+        if let Some(token) = &a.made {
+            ui.add_space(6.0);
+            widgets::label(ui, tr("Copy it now: it isn't shown again. Give it to your agent as FIGCRAFT_TOKEN, with this server as FIGCRAFT_SERVER."), t.text_secondary);
+            ui.horizontal(|ui| {
+                if widgets::button(ui, tr("Copy token"), true, true).clicked() {
+                    ui.ctx().copy_text(token.clone());
+                }
+            });
+        }
+        ui.add_space(6.0);
+        widgets::label(
+            ui,
+            tr("On the computer the agent runs on, figcraft-cli account login makes one and keeps it for figcraft-cli mcp, without showing it."),
+            t.text_secondary,
+        );
+    });
+    if let Some(id) = end {
+        app.run_background(ctx, "account.revokeAgentToken", json!({"server": server(app), "id": id}), Box::new(|app, ctx, _| ask_agents(app, ctx)));
+    }
+    if make {
+        let label = if a.label.trim().is_empty() { "Claude".to_string() } else { a.label.trim().to_string() };
+        let params = json!({"server": server(app), "access": a.access, "label": label});
+        app.run_background(
+            ctx,
+            "account.agentToken",
+            params,
+            Box::new(|app, ctx, v| {
+                if let Some(a) = app.ui.account.agents.as_mut() {
+                    a.made = v["token"].as_str().map(str::to_string);
+                }
+                ask_agents(app, ctx);
+            }),
+        );
+    }
+    if open {
+        app.ui.account.agents = Some(a);
+    }
+}
+
 fn ask_people(app: &mut FigApp, ctx: &egui::Context) {
     let params = json!({"server": server(app)});
     app.run_background(ctx, "account.users", params, Box::new(|app, _, v| app.ui.account.people = Some(v["users"].as_array().cloned())));
@@ -196,7 +329,13 @@ fn form(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
     let Some(mut f) = app.ui.account.form.take() else { return };
     let mut open = true;
     let mut submit = false;
-    let title = if f.invite { tr("Make your account") } else { tr("Sign in") };
+    let title = if f.reset {
+        tr("Choose a new password")
+    } else if f.invite {
+        tr("Make your account")
+    } else {
+        tr("Sign in")
+    };
     crate::dialogs::window(title, ctx).open(&mut open).show(ctx, |ui| {
         ui.set_width(FIELD_W + 20.0);
         let field = |ui: &mut Ui, label: &str, value: &mut String, secret: bool| {
@@ -212,20 +351,35 @@ fn form(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
             }
         };
         field(ui, tr("Server"), &mut f.server, false);
-        if f.invite {
+        if f.reset {
+            field(ui, tr("Reset code"), &mut f.code, false);
+        } else if f.invite {
             field(ui, tr("Invite code"), &mut f.code, false);
             field(ui, tr("Your name"), &mut f.name, false);
         }
-        field(ui, tr("Email"), &mut f.email, false);
-        field(ui, if f.invite { tr("Choose a password (at least 8 characters)") } else { tr("Password") }, &mut f.password, true);
+        if !f.reset {
+            field(ui, tr("Email"), &mut f.email, false);
+        }
+        let new_password = f.invite || f.reset;
+        field(ui, if new_password { tr("Choose a password (at least 8 characters)") } else { tr("Password") }, &mut f.password, true);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let ready =
-                !f.server.trim().is_empty() && !f.email.trim().is_empty() && !f.password.is_empty() && (!f.invite || !f.code.trim().is_empty());
-            submit = widgets::button(ui, if f.invite { tr("Make account") } else { tr("Sign in") }, true, ready).clicked();
-            let other = if f.invite { tr("I already have an account") } else { tr("I have an invite") };
+            let ready = !f.server.trim().is_empty()
+                && !f.password.is_empty()
+                && (f.reset || !f.email.trim().is_empty())
+                && (!(f.invite || f.reset) || !f.code.trim().is_empty());
+            let go = if f.reset {
+                tr("Set password")
+            } else if f.invite {
+                tr("Make account")
+            } else {
+                tr("Sign in")
+            };
+            submit = widgets::button(ui, go, true, ready).clicked();
+            let other = if f.invite || f.reset { tr("I already have an account") } else { tr("I have an invite") };
             if widgets::button(ui, other, false, true).clicked() {
-                f.invite = !f.invite;
+                f.invite = !(f.invite || f.reset);
+                f.reset = false;
             }
         });
         ui.label(
@@ -235,7 +389,9 @@ fn form(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
         );
     });
     if submit {
-        let (cmd, params) = if f.invite {
+        let (cmd, params) = if f.reset {
+            ("account.reset", json!({"server": f.server.trim(), "code": f.code.trim(), "password": f.password}))
+        } else if f.invite {
             (
                 "account.join",
                 json!({"server": f.server.trim(), "code": f.code.trim(), "email": f.email.trim(), "name": f.name.trim(), "password": f.password}),
@@ -337,7 +493,7 @@ fn share_dialog(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
 fn people(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
     let Some(list) = app.ui.account.people.clone() else { return };
     let mut open = true;
-    let (mut set, mut invite) = (None, false);
+    let (mut set, mut invite, mut reset) = (None, false, None);
     crate::dialogs::window(tr("People and invites"), ctx).open(&mut open).show(ctx, |ui| {
         ui.set_width(FIELD_W + 160.0);
         match &list {
@@ -360,6 +516,9 @@ fn people(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
                             }
                         });
                     });
+                    if widgets::button(ui, &trf("Reset password for {name}", &[("name", &name)]), false, true).clicked() {
+                        reset = Some((id, name.to_string()));
+                    }
                     ui.add_space(4.0);
                 }
             }
@@ -370,6 +529,25 @@ fn people(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
         widgets::label(ui, tr("Invite someone"), t.text);
         if widgets::checkbox(ui, app.ui.account.invite_admin, tr("Make them an admin")) {
             app.ui.account.invite_admin = !app.ui.account.invite_admin;
+        }
+        if let Some((name, code)) = &app.ui.account.reset {
+            ui.add_space(6.0);
+            widgets::label(
+                ui,
+                &trf(
+                    "{name} was signed out everywhere. This code lets them choose a new password once, within a day. Send it to them:",
+                    &[("name", name)],
+                ),
+                t.text_secondary,
+            );
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(code).monospace().color(t.text));
+                if widgets::button(ui, tr("Copy"), false, true).clicked() {
+                    ui.ctx().copy_text(code.clone());
+                }
+            });
+            widgets::label(ui, tr("In FigCraft they open Home, choose Online, then I have a reset code."), t.text_secondary);
+            ui.add_space(6.0);
         }
         invite = widgets::button(ui, tr("Make an invite code"), true, true).clicked();
         if let Some((code, admin)) = &app.ui.account.invite {
@@ -391,6 +569,14 @@ fn people(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
             );
         }
     });
+    if let Some((id, name)) = reset {
+        app.run_background(
+            ctx,
+            "account.resetPassword",
+            json!({"server": server(app), "id": id}),
+            Box::new(move |app, _, v| app.ui.account.reset = v["code"].as_str().map(|c| (name, c.to_string()))),
+        );
+    }
     if let Some(mut p) = set {
         p["server"] = json!(server(app));
         app.run_background(ctx, "account.setUser", p, Box::new(|app, ctx, _| ask_people(app, ctx)));
@@ -407,5 +593,6 @@ fn people(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
     if !open {
         app.ui.account.people = None;
         app.ui.account.invite = None;
+        app.ui.account.reset = None;
     }
 }

@@ -70,8 +70,8 @@ const BURST: usize = 256;
 /// What a connection is for.
 enum Kind {
     /// In `file`'s session as client `id`, through link `link`, or with an account (its id and what
-    /// it was let do).
-    Joined { file: String, id: u32, link: Option<String>, account: Option<(u64, Access)> },
+    /// it was let do) and session.
+    Joined { file: String, id: u32, link: Option<String>, account: Option<(u64, Access)>, session: Option<String> },
     /// Managing the server's files; `comments`: its client reads comment links.
     Managing { comments: bool },
     /// Using `file`'s team library through link `link` of `access` (revoking it disconnects).
@@ -436,7 +436,12 @@ impl<B: Backend> Hub<B> {
                 let _ = c.admitted.try_send(());
                 self.conns.insert(
                     conn,
-                    Conn { out: c.out, sock: c.sock, kind: Kind::Joined { file: file.clone(), id, link: admission.link, account }, ip: c.ip },
+                    Conn {
+                        out: c.out,
+                        sock: c.sock,
+                        kind: Kind::Joined { file: file.clone(), id, link: admission.link, account, session: admission.session },
+                        ip: c.ip,
+                    },
                 );
                 self.queue(&file, more);
             }
@@ -577,7 +582,12 @@ impl<B: Backend> Hub<B> {
                     _ => None,
                 })
                 .collect();
-            let gone: Vec<u64> = joined.into_iter().filter(|(_, u, a)| self.backend.account_access(*u, &file) != Some(*a)).map(|(k, ..)| k).collect();
+            // Less than they were let do (or nothing): they join again with what they may do now.
+            let gone: Vec<u64> = joined
+                .into_iter()
+                .filter(|(_, u, a)| self.backend.account_access(*u, &file).is_none_or(|now| !now.covers(*a)))
+                .map(|(k, ..)| k)
+                .collect();
             for conn in &gone {
                 if let Some(c) = self.conns.get(conn)
                     && c.out.tx.try_send(Out::Close(CloseCode::Away, STOPPED.into())).is_err()
@@ -598,14 +608,17 @@ impl<B: Backend> Hub<B> {
             self.barred.remove(&file);
             self.kick(&users, "this file was removed from the server");
         }
-        if !handled.signed_out.is_empty() {
+        if !handled.signed_out.is_empty() || !handled.ended.is_empty() {
             let users: Vec<u64> = self
                 .conns
                 .iter()
                 .filter(|(k, c)| {
                     **k != conn
                         && match &c.kind {
-                            Kind::Joined { account: Some((u, _)), .. } | Kind::Account { user: u, .. } => handled.signed_out.contains(u),
+                            Kind::Joined { account: Some((u, _)), session, .. } => {
+                                handled.signed_out.contains(u) || session.as_ref().is_some_and(|s| handled.ended.contains(s))
+                            }
+                            Kind::Account { user: u, session } => handled.signed_out.contains(u) || handled.ended.contains(session),
                             _ => false,
                         }
                 })

@@ -101,8 +101,8 @@ impl Store {
         Ok(info.id)
     }
 
-    /// The account signed in with session token `token`: the session's id and who.
-    pub fn account_session(&mut self, token: &str) -> Option<(String, AccountUser)> {
+    /// The account signed in with session token `token`: the session's id, who, and what limits it.
+    pub fn account_session(&mut self, token: &str) -> Option<crate::accounts::Session> {
         self.accounts.session(token)
     }
 

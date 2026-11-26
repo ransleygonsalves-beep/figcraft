@@ -161,6 +161,25 @@ impl Access {
         }
     }
 
+    /// How much it lets one do: viewing, then commenting, then editing.
+    fn power(self) -> u8 {
+        match self {
+            Access::View => 0,
+            Access::Comment => 1,
+            Access::Edit => 2,
+        }
+    }
+
+    /// Whether it lets one do everything `other` does.
+    pub fn covers(self, other: Access) -> bool {
+        self.power() >= other.power()
+    }
+
+    /// This access, limited to `cap`.
+    pub fn at_most(self, cap: Access) -> Access {
+        if cap.covers(self) { self } else { cap }
+    }
+
     /// This access as a client can read it: a comment link only views for one that doesn't
     /// announce [`COMMENTS`] (`reads_comments` false).
     pub fn for_reader(self, reads_comments: bool) -> Access {
@@ -969,6 +988,8 @@ pub enum AccountAuth {
     Session { token: String },
     /// Make an account with a one-time invite code (from an admin), and sign in to it.
     Invite { code: String, email: String, name: String, password: String },
+    /// Choose a new password with a one-time reset code (from an admin), and sign in.
+    Reset { code: String, password: String },
 }
 
 /// Opens an account connection (the first message on a connection, instead of [`Hello`]).
@@ -1024,6 +1045,30 @@ pub enum AccountReq {
     RenameVersion { file: String, id: String, name: String, description: String },
     /// Delete a version of `file` (its owner or an admin asks); the answer is the history.
     DeleteVersion { file: String, id: String },
+    /// A token for an agent (an AI assistant) acting for this account: it opens files with at
+    /// most `access` and can't share, change who may open a file, delete or administer; it ends
+    /// after 30 days. The answer is [`AccountReply::AgentToken`] (its token, shown once).
+    CreateAgentToken { access: Access, label: String },
+    /// This account's agent tokens (never the tokens themselves).
+    AgentTokens,
+    /// End one of this account's agent tokens.
+    RevokeAgentToken { id: String },
+    /// A one-time code that lets account `id` choose a new password; its sessions and agent tokens
+    /// end (an admin asks). The answer is [`AccountReply::ResetCode`].
+    ResetPassword { id: u64 },
+    /// This account restored version `id` of `file` (for the server's audit log).
+    Restored { file: String, id: String },
+}
+
+/// An agent token as listed (never the token).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTokenInfo {
+    pub id: String,
+    pub label: String,
+    pub access: Access,
+    /// When it was made and when it ends (Unix seconds).
+    pub created: i64,
+    pub expires: i64,
 }
 
 /// One version in a file's history on the server.
@@ -1116,6 +1161,18 @@ pub enum AccountReply {
     Version {
         info: VersionInfo,
         snapshot: Vec<Change>,
+    },
+    /// A new agent token: its id and the token (shown once), and when it ends (Unix seconds).
+    AgentToken {
+        id: String,
+        token: String,
+        expires: i64,
+    },
+    AgentTokens(Vec<AgentTokenInfo>),
+    /// A password reset code (shown once) and when it stops working (Unix seconds).
+    ResetCode {
+        code: String,
+        expires: i64,
     },
 }
 

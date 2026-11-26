@@ -24,6 +24,9 @@ figcraft-mcp = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
+craft-settings = { workspace = true }
+# Reads the password in `account login` without echo (Apache-2.0).
+rpassword = "7.3.1"
 
 [dev-dependencies]
 # 4.6 breaks Bash subcommand completion for hyphenated binary names (clap-rs/clap#6421).
