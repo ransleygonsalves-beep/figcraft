@@ -52,6 +52,33 @@
 > **ArtCraft is a community of artists from all walks of life.** Designers, illustrators, developers,
 > musicians, game makers &mdash; if you make things, you're one of us. **[Come say hi on Discord](https://discord.gg/artcraft).**
 
+> [!IMPORTANT]
+> **This is a fork of [storytold/figcraft](https://github.com/storytold/figcraft)** with features
+> made for our team. What it adds:
+>
+> - **Team accounts on your own server.** Sign in with an email and a password, invite people with
+>   one-time codes, share each file by email (edit, comment or view), and see only the files
+>   shared with you. [How it works](docs/server.md#accounts-and-version-history).
+> - **Version history on the server, with who edited what.** Checkpoints while people edit, named
+>   versions, view and restore for everyone in the file.
+> - **Vectorize image** (options with a live preview, one-colour mode) and **Remove background**
+>   (a model that runs on your computer; your images stay there).
+> - **Smooth tool** in vector edit mode, and a smoother prototype presenter (opens at 100%).
+>
+> **Get the app:** the [Releases](https://github.com/ransleygonsalves-beep/figcraft/releases) page
+> has Windows (`.msi`, portable `.zip`) and macOS (`.dmg`) builds. They aren't signed: on Windows
+> choose *More info ▸ Run anyway*; on macOS right-click the app and choose *Open* the first time.
+> The app says when a newer build is out.
+>
+> **Set up your team:** run `figcraft-server` where everyone can reach it ([deploying](docs/server.md#deploy-on-a-linux-server),
+> [TLS](docs/server.md#behind-a-reverse-proxy-tls)), then `figcraft-server invite --admin` and, in
+> the app, Home ▸ Online ▸ **I have an invite**. Invite your designers from **People and invites**
+> and send them the code with the server's address.
+>
+> **Branches:** `designer` is what ships, `combined` brings the features together, and each
+> feature is on its own `feat/*` branch from `main` (upstream). See [CLAUDE.md](CLAUDE.md) for how
+> releases are made.
+
 <p align="center">
   <a href="#a-look-around">A look around</a> ·
   <a href="#made-in-figcraft">Made in FigCraft</a> ·

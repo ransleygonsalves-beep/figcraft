@@ -363,11 +363,46 @@ are errors):
 | `messages_per_second` | 200 | Open: messages an address may send a second (a burst of four seconds' worth) |
 | `team_files` | (none) | The [team list](#the-team-list): everyone who reaches the server sees the files shared from it now and opens them with this access, `edit`, `comment` or `view` |
 | `web_url` | (none) | Where your browser build is served (`https://figcraft.example.com/app/`): the team list's browser links point there |
+| `accounts_only` | false | People open files with [their accounts](#accounts-and-version-history) only: share links and join codes are refused |
 
 With `listen` on every interface (`0.0.0.0`) and no `public_url`, links name this machine's
 network address. The limits marked *open* apply only with `open_publish = true`; a private server
 behaves as before (blocked addresses, report rates and the limits on
 [join codes](#sharing-with-a-join-code) apply to every server).
+
+## Accounts and version history
+
+A server can keep accounts: people sign in with an email and a password, see the files shared
+with them, and open them under their own name. Nothing goes to an outside service; passwords are
+kept as Argon2id hashes in `<data>/accounts.json`, and the app keeps a session token, never the
+password.
+
+- **The first admin.** On the server's machine, `figcraft-server invite --admin` prints a one-time
+  code. In the app: Home ▸ Online ▸ **I have an invite**, with the server's address, the code, a
+  name, an email and a password (at least 8 characters). That account is an admin.
+- **Inviting people.** An admin opens Home ▸ Online ▸ **People and invites** and makes an invite
+  (an admin one, or not): a code that works once, for 7 days, shown once. The server sends no
+  email: pass the code and the server's address on yourself. Unused invites can be withdrawn.
+- **Admins** see every file, make or unmake other admins and disable accounts (disabled accounts
+  are disconnected at once). An admin can't change their own account, and the last admin stays one.
+- **Files.** A file published from the app's Share popover with **Publish to your server** belongs
+  to that account. Its owner or an admin shares it by email (**Share** on its row): edit, comment
+  or view. Everyone else sees only the files shared with them; whoever loses access is
+  disconnected.
+- **Version history.** For files published by an account the server keeps a history in
+  `<data>/files/<id>/versions/`: a checkpoint every 30 minutes while people edit and when everyone
+  has left, and versions people save by name (from the Version history panel). Each says who saved
+  it and who changed the file since the one before. Anyone the file is shared with views and
+  restores versions (restoring needs edit access and changes the file for everyone in it); its
+  owner or an admin renames and deletes them. At most 20 checkpoints and 100 versions per file;
+  named versions are never dropped to make room.
+- **Wrong passwords and invite codes** count like wrong join codes: too many from an address lock
+  it out for a while.
+
+Signing in sends a password, so anyone outside your own machine should reach the server through
+[a TLS reverse proxy](#behind-a-reverse-proxy-tls) (`wss://`). With `accounts_only = true` share
+links and join codes stop working, and accounts are the only way in. The app's commands for all of
+this are `account.*` (`figcraft-cli commands`).
 
 ## The data directory
 
