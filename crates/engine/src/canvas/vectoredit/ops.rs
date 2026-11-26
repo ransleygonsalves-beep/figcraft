@@ -3,7 +3,7 @@
 //! `vectoredit.rs` re-fit the node afterwards.
 
 use figcraft_doc::{HandleMirroring, Region, Segment, VectorNetwork, Vertex, WindingRule};
-use figcraft_geom::kurbo::{CubicBez, ParamCurve, ParamCurveNearest};
+use figcraft_geom::kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveNearest, PathEl};
 use figcraft_geom::{Affine, Point, Vec2};
 
 fn tvec(t: (f64, f64)) -> Vec2 {
@@ -962,91 +962,237 @@ pub fn erase(net: &mut VectorNetwork, c: Point, r: f64) -> bool {
     changed
 }
 
-/// How far one dab of the Smooth tool moves a point towards the middle of its two neighbours at
-/// the brush's centre (less towards its edge, none past it).
-const SMOOTH_PULL: f64 = 0.35;
+/// How far one dab of the Smooth tool moves a sample of the path towards the middle of its two
+/// neighbours, at the brush's centre (less towards its edge, none past it).
+const SMOOTH_PULL: f64 = 0.5;
+/// Rounds of that per dab.
+const SMOOTH_ROUNDS: usize = 2;
+/// The most samples one stretch of path gets per dab.
+const MAX_SMOOTH_SAMPLES: usize = 4096;
 
-/// The Smooth tool: one dab of a round brush at `c` with radius `r` (local units). Each point
-/// inside it that lies along a path (two segments, to two other points) moves part of the way
-/// towards the middle of its neighbours, which irons out wobbles, and gets smooth handles along
-/// them; then each of those points that lies about midway between its neighbours by now, and that
-/// the curve can do without (running within `tol` of where it ran), is removed. Ends of open paths and junctions of three or more segments stay as they are.
-/// Returns whether anything changed.
+/// The Smooth tool: one dab of a round brush at `c` with radius `r` (local units), working on the
+/// curve itself, however far apart the path's points are. Each stretch of path the brush touches,
+/// up to the first points past it (or a path's end, or a junction of three or more segments), is
+/// sampled a quarter of the brush apart; the samples under the brush move towards the middle of
+/// their neighbours, which rounds corners and irons out wobbles while barely moving a curve that
+/// is smooth already; and the stretch is fitted again with as few smooth curves as keep within
+/// `tol` of the samples. The points that bound the stretch stay, and so does anything outside it.
+/// A closed path entirely under the brush has no such points and stays as it is. Returns whether
+/// anything changed.
 pub fn smooth(net: &mut VectorNetwork, c: Point, r: f64, tol: f64) -> bool {
-    if !(r.is_finite() && r > 0.0 && finite(c.to_vec2())) {
+    if !(r.is_finite() && r > 0.0 && finite(c.to_vec2()) && tol.is_finite() && tol >= 0.0) {
         return false;
     }
-    // Where each point under the brush goes, worked out from where the points were before the dab.
-    let moves: Vec<(usize, Point)> = net
-        .vertices
-        .iter()
-        .enumerate()
-        .filter_map(|(i, v)| {
-            let d = (v.point() - c).hypot();
-            if d >= r {
-                return None;
-            }
-            let (p1, p2) = path_neighbours(net, i)?;
-            Some((i, v.point().lerp(p1.midpoint(p2), SMOOTH_PULL * (1.0 - d / r))))
-        })
-        .collect();
-    if moves.is_empty() {
-        return false;
-    }
-    for (i, to) in &moves {
-        if let Some(v) = net.vertices.get_mut(*i) {
-            (v.x, v.y) = (to.x, to.y);
+    let mut changed = false;
+    // One stretch at a time: refitting renumbers the network, so the stretches are found again.
+    let mut done: Vec<(Point, Point)> = Vec::new();
+    for _ in 0..64 {
+        let Some(st) = stretches(net, c, r).into_iter().find(|st| !done.iter().any(|d| same_ends(*d, st.ends(net)))) else { break };
+        done.push(st.ends(net));
+        if let Some(fitted) = smooth_stretch(net, &st, c, r, tol) {
+            changed |= replace_stretch(net, &st, &fitted);
         }
     }
-    for (i, _) in &moves {
-        auto_smooth(net, *i);
-    }
-    // Highest index first: removing a point renumbers only the points after it. Only a point that
-    // already lies about midway between its neighbours goes: one dropped while the path still
-    // wobbles would keep the wobble in the curve healed over it.
-    let mut ids: Vec<usize> = moves.iter().map(|m| m.0).collect();
-    ids.sort_unstable_by(|a, b| b.cmp(a));
-    for vi in ids {
-        let settled =
-            path_neighbours(net, vi).zip(net.vertices.get(vi).map(Vertex::point)).is_some_and(|((p1, p2), p)| (p - p1.midpoint(p2)).hypot() <= tol);
-        if settled && removable(net, vi, tol) {
-            delete_vertices(net, &[vi], true);
-        }
-    }
-    true
+    changed
 }
 
-/// The two neighbours of point `vi` when it lies along a path: exactly two segments, to two other
-/// points.
-fn path_neighbours(net: &VectorNetwork, vi: usize) -> Option<(Point, Point)> {
-    let inc = net.incident(vi);
-    let [(s1, a1), (s2, a2)] = inc.as_slice() else { return None };
-    let other = |s: usize, at_a: bool| net.segments.get(s).map(|x| if at_a { x.b } else { x.a });
-    let (o1, o2) = (other(*s1, *a1)?, other(*s2, *a2)?);
-    if o1 == o2 || o1 == vi || o2 == vi {
+fn same_ends(a: (Point, Point), b: (Point, Point)) -> bool {
+    let close = |p: Point, q: Point| (p - q).hypot() < 1e-9;
+    (close(a.0, b.0) && close(a.1, b.1)) || (close(a.0, b.1) && close(a.1, b.0))
+}
+
+/// A run of segments along a path, from point `verts[0]` to the last, each segment walked from
+/// the point before it to the point after it; its inner points each have exactly two segments.
+#[derive(Debug)]
+struct Stretch {
+    verts: Vec<usize>,
+    segs: Vec<usize>,
+}
+
+impl Stretch {
+    fn ends(&self, net: &VectorNetwork) -> (Point, Point) {
+        let at = |i: Option<&usize>| i.and_then(|v| net.vertices.get(*v)).map_or(Point::ZERO, Vertex::point);
+        (at(self.verts.first()), at(self.verts.last()))
+    }
+}
+
+/// From point `from`, leaving along segment `seg`'s other side: the points and segments passed
+/// while the next point has two segments and the brush covers it or touches the segment after it.
+fn walk(net: &VectorNetwork, touched: &[bool], used: &mut [bool], from: usize, seg: usize, c: Point, r: f64) -> (Vec<usize>, Vec<usize>) {
+    let (mut verts, mut segs) = (vec![from], Vec::new());
+    let (mut v, mut seg) = (from, seg);
+    loop {
+        let inc = net.incident(v);
+        let [(s1, _), (s2, _)] = inc.as_slice() else { break };
+        let next = if *s1 == seg { *s2 } else { *s1 };
+        let covered = net.vertices.get(v).is_some_and(|p| (p.point() - c).hypot() < r);
+        if next == seg || used.get(next).copied().unwrap_or(true) || !(covered || touched.get(next).copied().unwrap_or(false)) {
+            break;
+        }
+        let Some(n) = net.segments.get(next) else { break };
+        if let Some(u) = used.get_mut(next) {
+            *u = true;
+        }
+        segs.push(next);
+        v = if n.a == v { n.b } else { n.a };
+        verts.push(v);
+        seg = next;
+    }
+    (verts, segs)
+}
+
+/// The stretches of path the circle at `c` with radius `r` touches: each touched segment, grown
+/// through points with two segments while the brush covers them or the next segment too.
+fn stretches(net: &VectorNetwork, c: Point, r: f64) -> Vec<Stretch> {
+    let touched: Vec<bool> = (0..net.segments.len()).map(|s| !inside_ranges(net, s, c, r).is_empty()).collect();
+    let mut used = vec![false; net.segments.len()];
+    let mut out = Vec::new();
+    for start in 0..net.segments.len() {
+        if !touched[start] || used[start] {
+            continue;
+        }
+        let Some(seg) = net.segments.get(start).copied() else { continue };
+        used[start] = true;
+        let (back_v, back_s) = walk(net, &touched, &mut used, seg.a, start, c, r);
+        let (fwd_v, fwd_s) = walk(net, &touched, &mut used, seg.b, start, c, r);
+        let verts: Vec<usize> = back_v.iter().rev().copied().chain(fwd_v).collect();
+        let segs: Vec<usize> = back_s.iter().rev().copied().chain(std::iter::once(start)).chain(fwd_s).collect();
+        // A closed path walked all the way round has no point to hold.
+        if verts.first() != verts.last() {
+            out.push(Stretch { verts, segs });
+        }
+    }
+    out
+}
+
+/// The stretch's curve sampled about a quarter of the brush apart, smoothed under the brush and
+/// fitted again within `tol`: the fitted curves from its first point to its last. `None` when
+/// nothing moved.
+fn smooth_stretch(net: &VectorNetwork, st: &Stretch, c: Point, r: f64, tol: f64) -> Option<Vec<CubicBez>> {
+    use figcraft_geom::kurbo::ParamCurveArclen;
+    let step = r / 4.0;
+    let mut q: Vec<Point> = Vec::new();
+    let (mut t_start, mut t_end) = (Vec2::ZERO, Vec2::ZERO);
+    for (k, (si, from)) in st.segs.iter().zip(&st.verts).enumerate() {
+        let cb = net.cubic(*si)?;
+        let cb = if net.segments.get(*si)?.a == *from { cb } else { CubicBez::new(cb.p3, cb.p2, cb.p1, cb.p0) };
+        if k == 0 {
+            t_start = if (cb.p1 - cb.p0).hypot() > 1e-9 { cb.p1 - cb.p0 } else { cb.p3 - cb.p0 };
+        }
+        t_end = if (cb.p3 - cb.p2).hypot() > 1e-9 { cb.p3 - cb.p2 } else { cb.p3 - cb.p0 };
+        let n = ((cb.arclen(step * 1e-2) / step).ceil() as usize).clamp(1, MAX_SMOOTH_SAMPLES);
+        let first = usize::from(!q.is_empty());
+        q.extend((first..=n).map(|i| cb.eval(i as f64 / n as f64)));
+        if q.len() > MAX_SMOOTH_SAMPLES {
+            return None;
+        }
+    }
+    if q.len() < 3 {
         return None;
     }
-    Some((net.vertices.get(o1)?.point(), net.vertices.get(o2)?.point()))
+    let mut moved = false;
+    for _ in 0..SMOOTH_ROUNDS {
+        let prev = q.clone();
+        for i in 1..prev.len() - 1 {
+            let d = (prev[i] - c).hypot();
+            if d < r {
+                q[i] = prev[i].lerp(prev[i - 1].midpoint(prev[i + 1]), SMOOTH_PULL * (1.0 - d / r));
+                moved |= (q[i] - prev[i]).hypot() > 1e-9;
+            }
+        }
+    }
+    if !moved {
+        return None;
+    }
+    Some(fit_samples(&q, t_start, t_end, tol))
 }
 
-/// Whether point `vi` can go with the curve over it (as [`delete_vertices`] heals it) staying
-/// within `tol` of the two segments it replaces. A closed shape keeps at least three points.
-fn removable(net: &VectorNetwork, vi: usize, tol: f64) -> bool {
-    let inc = net.incident(vi);
-    let [(s1, _), (s2, _)] = inc.as_slice() else { return false };
-    let (Some(x), Some(y)) = (net.segments.get(*s1).copied(), net.segments.get(*s2).copied()) else { return false };
-    let o1 = if x.a == vi { (x.b, x.tb) } else { (x.a, x.ta) };
-    let o2 = if y.a == vi { (y.b, y.tb) } else { (y.a, y.ta) };
-    if o1.0 == o2.0 || parts(net).iter().find(|p| p.contains(&vi)).is_none_or(|p| p.len() <= 3) {
+/// Smooth curves through the samples `q` (each sample's tangent along its neighbours; the ends
+/// along `t_start` and `t_end`), then as few of them as keep within `tol`.
+fn fit_samples(q: &[Point], t_start: Vec2, t_end: Vec2, tol: f64) -> Vec<CubicBez> {
+    let n = q.len();
+    let unit = |v: Vec2| if v.hypot() > 1e-12 { v / v.hypot() } else { v };
+    let tangent = |i: usize| -> Vec2 {
+        if i == 0 {
+            unit(t_start) * (q[1] - q[0]).hypot()
+        } else if i == n - 1 {
+            unit(t_end) * (q[n - 1] - q[n - 2]).hypot()
+        } else {
+            (q[i + 1] - q[i - 1]) / 2.0
+        }
+    };
+    let mut path = BezPath::new();
+    path.move_to(q[0]);
+    for i in 0..n - 1 {
+        path.curve_to(q[i] + tangent(i) / 3.0, q[i + 1] - tangent(i + 1) / 3.0, q[i + 1]);
+    }
+    let fitted = figcraft_geom::simplify_path(&path, tol.max(1e-3));
+    let mut at = q[0];
+    let mut out = Vec::new();
+    for el in fitted.elements() {
+        match *el {
+            PathEl::MoveTo(p) => at = p,
+            PathEl::LineTo(p) => {
+                out.push(CubicBez::new(at, at, p, p));
+                at = p;
+            }
+            PathEl::QuadTo(p1, p2) => {
+                out.push(figcraft_geom::kurbo::QuadBez::new(at, p1, p2).raise());
+                at = p2;
+            }
+            PathEl::CurveTo(p1, p2, p3) => {
+                out.push(CubicBez::new(at, p1, p2, p3));
+                at = p3;
+            }
+            PathEl::ClosePath => {}
+        }
+    }
+    out
+}
+
+/// Put `fitted` (from the stretch's first point to its last) in place of the stretch: its inner
+/// points go (the healing delete leaves one segment between its ends, keeping the regions), that
+/// segment is split once per further curve, and each piece takes its curve.
+fn replace_stretch(net: &mut VectorNetwork, st: &Stretch, fitted: &[CubicBez]) -> bool {
+    let (Some(&a0), Some(&b0)) = (st.verts.first(), st.verts.last()) else { return false };
+    if fitted.is_empty() {
         return false;
     }
-    // The curve `delete_vertices` would put in their place.
-    let curved = !(x.is_straight() && y.is_straight());
-    let (ta, tb) = if curved { heal_handles(net, vi, o1, o2).unwrap_or((o1.1, o2.1)) } else { (o1.1, o2.1) };
-    let (Some(a), Some(b)) = (net.vertices.get(o1.0).map(Vertex::point), net.vertices.get(o2.0).map(Vertex::point)) else { return false };
-    let healed = CubicBez::new(a, a + tvec(ta), b + tvec(tb), b);
-    let (Some(c1), Some(c2)) = (net.cubic(*s1), net.cubic(*s2)) else { return false };
-    (1..8).map(|k| f64::from(k) / 8.0).flat_map(|t| [c1.eval(t), c2.eval(t)]).all(|p| healed.nearest(p, 1e-6).distance_sq <= tol * tol)
+    let inner: Vec<usize> = st.verts.get(1..st.verts.len().saturating_sub(1)).unwrap_or(&[]).to_vec();
+    delete_vertices(net, &inner, true);
+    let shift = |v: usize| v - inner.iter().filter(|i| **i < v).count();
+    let (a, b) = (shift(a0), shift(b0));
+    // The segment joining the ends (the healed one went on last).
+    let joins = |x: &Segment| (x.a == a && x.b == b) || (x.a == b && x.b == a);
+    let Some(seg) = (0..net.segments.len()).rev().find(|s| net.segments.get(*s).is_some_and(joins)) else { return false };
+    let before = net.segments.len();
+    for j in (1..fitted.len()).rev() {
+        // Even cuts, last first: `seg` keeps the part before each one.
+        if split_segment(net, seg, j as f64 / (j + 1) as f64).is_none() {
+            return false;
+        }
+    }
+    let mut left: Vec<usize> = std::iter::once(seg).chain(before..net.segments.len()).collect();
+    // Walk the pieces from `a` to `b`, giving each its curve.
+    let mut v = a;
+    for cb in fitted {
+        let Some(pos) = left.iter().position(|s| net.segments.get(*s).is_some_and(|x| x.a == v || x.b == v)) else { return false };
+        let s = left.remove(pos);
+        let Some(x) = net.segments.get(s).copied() else { return false };
+        let (from_a, next) = if x.a == v { (true, x.b) } else { (false, x.a) };
+        if let Some(p) = net.vertices.get_mut(next) {
+            (p.x, p.y) = (cb.p3.x, cb.p3.y);
+            if next != b {
+                p.mirror = Some(HandleMirroring::Angle);
+            }
+        }
+        let (h0, h1) = (cb.p1 - cb.p0, cb.p2 - cb.p3);
+        let (ta, tb) = if from_a { (h0, h1) } else { (h1, h0) };
+        net.set_handle(s, true, (ta.x, ta.y));
+        net.set_handle(s, false, (tb.x, tb.y));
+        v = next;
+    }
+    true
 }
 
 #[cfg(test)]

@@ -1,5 +1,7 @@
 //! The Smooth tool: dragged along a path it irons out wobbles and drops points the curve can do
-//! without; ends, junctions and what's outside the brush stay; one drag is one undo step.
+//! without, rounds the corners of a path with few points without pulling it out of shape, and
+//! barely moves a curve that is smooth already; ends, junctions and what's outside the brush
+//! stay; one drag is one undo step.
 
 use serde_json::json;
 
@@ -54,6 +56,53 @@ fn dragging_along_a_path_irons_it_out_and_drops_points() {
     assert!(n.vertices.iter().any(|v| (v.point() - Point::new(0.0, 0.0)).hypot() < 1e-9), "the start stays");
     assert!(n.vertices.iter().any(|v| (v.point() - Point::new(200.0, 0.0)).hypot() < 1e-9), "the end stays");
     assert_eq!(super::ops::parts(&n).len(), 1, "still one path");
+}
+
+/// Points along every segment of `n`.
+fn samples(n: &VectorNetwork) -> Vec<Point> {
+    use figcraft_geom::kurbo::ParamCurve;
+    (0..n.segments.len()).filter_map(|s| n.cubic(s)).flat_map(|c| (0..=32).map(move |k| c.eval(f64::from(k) / 32.0))).collect()
+}
+
+/// How far the farthest point of `a` is from the nearest point of `b`.
+fn strays(a: &[Point], b: &[Point]) -> f64 {
+    a.iter().map(|p| b.iter().map(|q| (*p - *q).hypot()).fold(f64::INFINITY, f64::min)).fold(0.0, f64::max)
+}
+
+#[test]
+fn a_path_with_few_points_gets_round_corners_without_losing_its_shape() {
+    // A pen path: five points 120 apart with sharp corners.
+    let pts = [Point::new(0.0, 60.0), Point::new(120.0, 0.0), Point::new(240.0, 90.0), Point::new(360.0, 10.0), Point::new(480.0, 70.0)];
+    let mut n = VectorNetwork::from_points(&pts, false);
+    let before = samples(&n);
+    // Along the path, through its points.
+    for w in pts.windows(2) {
+        for k in 0..=40 {
+            smooth(&mut n, w[0].lerp(w[1], f64::from(k) / 40.0), 12.0, 1.0);
+        }
+    }
+    assert!((0..n.segments.len()).any(|s| !n.segments[s].is_straight()), "the corners are rounded: {n:?}");
+    assert!(strays(&samples(&n), &before) < 12.0, "it stays within the brush of where it was: {}", strays(&samples(&n), &before));
+    assert!(n.vertices.iter().any(|v| v.point() == pts[0]) && n.vertices.iter().any(|v| v.point() == pts[4]), "the ends stay");
+}
+
+#[test]
+fn a_smooth_curve_barely_moves() {
+    use figcraft_geom::kurbo::Shape;
+    let ellipse = figcraft_geom::kurbo::Ellipse::new((100.0, 75.0), (100.0, 75.0), 0.0);
+    let mut n = VectorNetwork::from_path(&ellipse.to_path(0.1));
+    // Back and forth along its top, three times.
+    for _ in 0..3 {
+        for k in 0..=60 {
+            let a = std::f64::consts::PI * (1.2 + 0.6 * f64::from(k) / 60.0);
+            smooth(&mut n, Point::new(100.0 + 100.0 * a.cos(), 75.0 + 75.0 * a.sin()), 12.0, 1.0);
+        }
+    }
+    // Every point of the curve stays about on the ellipse.
+    let off =
+        samples(&n).iter().map(|p| ((((p.x - 100.0) / 100.0).powi(2) + ((p.y - 75.0) / 75.0).powi(2)).sqrt() - 1.0).abs() * 75.0).fold(0.0, f64::max);
+    assert!(off < 1.5, "the ellipse keeps its shape: strays {off}");
+    assert!(!n.regions.is_empty(), "still filled");
 }
 
 #[test]
