@@ -161,6 +161,10 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
+          # The script stops at 25 MiB, Cloudflare Pages' per-file cap. This build (with the
+          # fonts) is about 27 MiB and is served from our own server, which has no such cap, so
+          # it may be up to 32 MiB here. Hosting it on Cloudflare Pages would need it smaller.
+          FIGCRAFT_WASM_MAX_BYTES: "33554432"
         run: bash packaging/web/package.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
