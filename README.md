@@ -61,12 +61,18 @@
 >   shared with you. [How it works](docs/server.md#accounts-and-version-history).
 > - **Version history on the server, with who edited what.** Checkpoints while people edit, named
 >   versions, view and restore for everyone in the file.
+> - **Works in the browser and with Claude.** The web build signs in too, and
+>   `figcraft-cli account login` lets Claude (`figcraft-cli mcp`) work in your shared files with a
+>   limited token, never your password ([how](docs/mcp.md#signing-in-to-your-teams-server)).
+>   Admins can reset passwords, and the server keeps an audit log.
 > - **Vectorize image** (options with a live preview, one-colour mode) and **Remove background**
 >   (a model that runs on your computer; your images stay there).
 > - **Smooth tool** in vector edit mode, and a smoother prototype presenter (opens at 100%).
 >
 > **Get the app:** the [Releases](https://github.com/ransleygonsalves-beep/figcraft/releases) page
-> has Windows (`.msi`, portable `.zip`) and macOS (`.dmg`) builds. They aren't signed: on Windows
+> has Windows (`.msi`, portable `.zip`) and macOS (`.dmg`) builds, the browser build
+> (`figcraft-web-*.zip`), the server for Linux (`figcraft-server-*-linux-x86_64.tar.gz`) and
+> `figcraft-cli` for Mac (Windows has it in the installer). They aren't signed: on Windows
 > choose *More info ▸ Run anyway*; on macOS right-click the app and choose *Open* the first time.
 > The app says when a newer build is out.
 >

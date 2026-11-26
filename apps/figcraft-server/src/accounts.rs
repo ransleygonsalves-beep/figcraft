@@ -8,12 +8,18 @@
 //! session lasts while it is used at least every [`SESSION_IDLE_SECS`]; disabling an account,
 //! changing its password or signing out ends sessions. Which files an account may open is kept
 //! with each file (`meta.json`), not here.
+//!
+//! An account can make tokens for agents (AI assistants acting for it): a session that opens files
+//! with at most the access it was made with, may not share, change who opens a file, delete or
+//! administer, and ends [`AGENT_SECS`] after it was made whatever its use. An admin can give an
+//! account a one-time reset code ([`RESET_SECS`]) to choose a new password with; that ends its
+//! sessions and agent tokens.
 
 use std::path::{Path, PathBuf};
 
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use figcraft_collab::message::AccountUser;
+use figcraft_collab::message::{Access, AccountUser, AgentTokenInfo};
 use serde::{Deserialize, Serialize};
 
 use crate::disk;
@@ -25,6 +31,14 @@ pub const ACCOUNTS: &str = "accounts.json";
 pub const SESSION_IDLE_SECS: u64 = 90 * 24 * 3600;
 /// An invite not used within this long stops working (7 days).
 pub const INVITE_SECS: u64 = 7 * 24 * 3600;
+/// An agent token ends this long after it was made, used or not (30 days).
+pub const AGENT_SECS: u64 = 30 * 24 * 3600;
+/// A password reset code not used within this long stops working (1 day).
+pub const RESET_SECS: u64 = 24 * 3600;
+/// The most agent tokens one account keeps.
+const MAX_AGENTS: usize = 20;
+/// The longest agent token label.
+const MAX_LABEL: usize = 40;
 /// The shortest password taken.
 pub const MIN_PASSWORD: usize = 8;
 /// The longest password, email and name taken (characters).
@@ -52,6 +66,17 @@ struct Kept {
     invites: Vec<Invite>,
     #[serde(default)]
     sessions: Vec<SessionRec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    resets: Vec<ResetRec>,
+}
+
+/// A password reset code not used yet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct ResetRec {
+    /// SHA-256 of the code (hex).
+    hash: String,
+    user: u64,
+    expires: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -92,6 +117,42 @@ struct SessionRec {
     user: u64,
     created: u64,
     used: u64,
+    /// An agent token: what limits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent: Option<AgentRec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct AgentRec {
+    /// Shown in listings, to end it with (not the token).
+    id: String,
+    label: String,
+    access: Access,
+    expires: u64,
+}
+
+impl SessionRec {
+    /// Still good at `t`: used lately and, for an agent, not past its end.
+    fn lasts(&self, t: u64) -> bool {
+        t.saturating_sub(self.used) <= SESSION_IDLE_SECS && self.agent.as_ref().is_none_or(|a| t < a.expires)
+    }
+}
+
+/// A session as the server acts on it: its id (the token's hash), who, and, for an agent token,
+/// what limits it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Session {
+    pub id: String,
+    pub user: AccountUser,
+    pub agent: Option<Agent>,
+}
+
+/// What an agent token may do: open files with at most `access`; it shows as `label` for the
+/// account's name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Agent {
+    pub access: Access,
+    pub label: String,
 }
 
 /// The accounts, as kept and in memory.
@@ -148,13 +209,14 @@ impl Accounts {
 
     /// The account signed in with session token `token`, while it lasts and isn't disabled; using
     /// it keeps it going.
-    pub fn session(&mut self, token: &str) -> Option<(String, AccountUser)> {
+    pub fn session(&mut self, token: &str) -> Option<Session> {
         let h = hash(token);
         let t = now();
         let rec = self.kept.sessions.iter().find(|s| s.hash == h)?;
-        if t.saturating_sub(rec.used) > SESSION_IDLE_SECS {
+        if !rec.lasts(t) {
             return None;
         }
+        let agent = rec.agent.as_ref().map(|a| Agent { access: a.access, label: a.label.clone() });
         let user = self.kept.users.iter().find(|u| u.id == rec.user && !u.disabled)?.shown();
         if t.saturating_sub(rec.used) > TOUCH_EVERY {
             let _ = self.change(|k| {
@@ -164,7 +226,128 @@ impl Accounts {
                 Ok(())
             });
         }
-        Some((h, user))
+        Some(Session { id: h, user, agent })
+    }
+
+    /// What limits session `id` (its token's hash), when it is an agent token.
+    pub fn agent_of(&self, id: &str) -> Option<Agent> {
+        let a = self.kept.sessions.iter().find(|s| s.hash == id)?.agent.as_ref()?;
+        Some(Agent { access: a.access, label: a.label.clone() })
+    }
+
+    /// A token for an agent acting for account `user`, opening files with at most `access`: its
+    /// id, the token (given once) and when it ends.
+    pub fn create_agent(&mut self, user: u64, access: Access, label: &str) -> Result<(String, String, u64), String> {
+        let label = clean_name(label).chars().take(MAX_LABEL).collect::<String>();
+        let label = if label.is_empty() { "Claude".to_string() } else { label };
+        let token = figcraft_collab_net::token::secret()?;
+        let id = figcraft_collab_net::token::file_id()?;
+        let t = now();
+        let expires = t + AGENT_SECS;
+        let rec = SessionRec { hash: hash(&token), user, created: t, used: t, agent: Some(AgentRec { id: id.clone(), label, access, expires }) };
+        self.change(|k| {
+            k.sessions.retain(|x| x.lasts(t));
+            if k.sessions.iter().filter(|s| s.user == user && s.agent.is_some()).count() >= MAX_AGENTS {
+                return Err(format!("an account keeps at most {MAX_AGENTS} agent tokens: end some first"));
+            }
+            if k.sessions.len() >= MAX_SESSIONS {
+                return Err("this server keeps too many sessions right now: try again later".into());
+            }
+            k.sessions.push(rec);
+            Ok(())
+        })?;
+        Ok((id, token, expires))
+    }
+
+    /// Account `user`'s agent tokens that still work.
+    pub fn agents(&self, user: u64) -> Vec<AgentTokenInfo> {
+        let t = now();
+        let secs = |s: u64| i64::try_from(s).unwrap_or(i64::MAX);
+        self.kept
+            .sessions
+            .iter()
+            .filter(|s| s.user == user && s.lasts(t))
+            .filter_map(|s| {
+                let a = s.agent.as_ref()?;
+                Some(AgentTokenInfo {
+                    id: a.id.clone(),
+                    label: a.label.clone(),
+                    access: a.access,
+                    created: secs(s.created),
+                    expires: secs(a.expires),
+                })
+            })
+            .collect()
+    }
+
+    /// End account `user`'s agent token `id`: the ended session's id (its hash).
+    pub fn revoke_agent(&mut self, user: u64, id: &str) -> Result<String, String> {
+        let gone = self
+            .kept
+            .sessions
+            .iter()
+            .find(|s| s.user == user && s.agent.as_ref().is_some_and(|a| a.id == id))
+            .map(|s| s.hash.clone())
+            .ok_or("there's no such agent token")?;
+        let g = gone.clone();
+        self.change(|k| {
+            k.sessions.retain(|s| s.hash != g);
+            Ok(())
+        })?;
+        Ok(gone)
+    }
+
+    /// A one-time code that lets account `id` choose a new password, as admin `by` asks; its
+    /// sessions and agent tokens end now. The code and when it stops working.
+    pub fn reset_code(&mut self, by: u64, id: u64) -> Result<(String, u64), String> {
+        if by == id {
+            return Err("change your own password with your current one instead".into());
+        }
+        if !self.kept.users.iter().any(|u| u.id == id) {
+            return Err("no such account".into());
+        }
+        let code = figcraft_collab_net::token::secret()?;
+        let t = now();
+        let rec = ResetRec { hash: hash(&code), user: id, expires: t + RESET_SECS };
+        self.change(|k| {
+            // One code at a time per account: a new one replaces the last.
+            k.resets.retain(|r| r.user != id && r.expires > t);
+            k.resets.push(rec);
+            k.sessions.retain(|s| s.user != id);
+            Ok(())
+        })?;
+        Ok((code, t + RESET_SECS))
+    }
+
+    /// Whether `code` is a reset code still open (checked before the work of hashing a password).
+    pub fn reset_open(&self, code: &str) -> bool {
+        let (h, t) = (hash(code), now());
+        self.kept.resets.iter().any(|r| r.hash == h && r.expires > t)
+    }
+
+    /// Choose a new password with reset `code`, and sign in. The code is used up.
+    pub fn reset(&mut self, code: &str, password: &str) -> Result<Signed, String> {
+        let (h, t) = (hash(code), now());
+        let user = self
+            .kept
+            .resets
+            .iter()
+            .find(|r| r.hash == h && r.expires > t)
+            .map(|r| r.user)
+            .ok_or("this reset code doesn't work: it was used or is too old; ask your admin for a new one")?;
+        if self.kept.users.iter().any(|u| u.id == user && u.disabled) {
+            return Err("this account is disabled: ask your admin".into());
+        }
+        check_password(password)?;
+        let hashed = hash_password(password)?;
+        self.change(|k| {
+            let u = k.users.iter_mut().find(|u| u.id == user).ok_or("the account is gone")?;
+            u.password = hashed;
+            k.resets.retain(|r| r.user != user);
+            k.sessions.retain(|s| s.user != user);
+            Ok(())
+        })?;
+        self.new_session(user)
     }
 
     /// Sign in with `email` and `password`: a new session.
@@ -191,14 +374,14 @@ impl Accounts {
         let shown = self.user(user).ok_or("the account is gone")?;
         let s = session.clone();
         self.change(|k| {
-            k.sessions.retain(|x| t.saturating_sub(x.used) <= SESSION_IDLE_SECS);
+            k.sessions.retain(|x| x.lasts(t));
             if k.sessions.len() >= MAX_SESSIONS {
                 // The least recently used one goes.
                 if let Some(i) = k.sessions.iter().enumerate().min_by_key(|(_, x)| x.used).map(|(i, _)| i) {
                     k.sessions.remove(i);
                 }
             }
-            k.sessions.push(SessionRec { hash: s, user, created: t, used: t });
+            k.sessions.push(SessionRec { hash: s, user, created: t, used: t, agent: None });
             Ok(())
         })?;
         Ok(Signed { token, session, user: shown })

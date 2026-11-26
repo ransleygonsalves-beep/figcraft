@@ -62,8 +62,8 @@ impl Backend for OneFile {
         let edit = same_secret(token, &self.token);
         let view = self.view.as_deref().is_some_and(|v| same_secret(token, v));
         match (edit, view) {
-            (true, _) => Ok(Admission { access: Access::Edit, link: None, account: None }),
-            (false, true) => Ok(Admission { access: Access::View, link: None, account: None }),
+            (true, _) => Ok(Admission { access: Access::Edit, link: None, account: None, session: None }),
+            (false, true) => Ok(Admission { access: Access::View, link: None, account: None, session: None }),
             (false, false) => Err("wrong session token".into()),
         }
     }

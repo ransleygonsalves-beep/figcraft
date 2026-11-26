@@ -255,3 +255,78 @@ fn the_servers_version_history_says_who_edited_and_restores_for_everyone() {
     assert!(history[0].auto && history[0].editors == vec!["Dee".to_string()], "{history:?}");
     server.stop();
 }
+
+/// Going live with accounts only: an agent's token opens files with at most its access, shows as
+/// acting for its account, can't share, and disconnects when ended; an admin's reset code lets a
+/// designer choose a new password (their sessions end); the team list shows nothing; and the
+/// audit log notes all of it without a password, code or token.
+#[test]
+fn agent_tokens_resets_and_the_audit_log_with_accounts_only() {
+    use figcraft_collab::message::{ClientMsg, OpenHosting, PROTOCOL, ServerMsg};
+    use serde_json::json;
+    let dir = TempDir::new("account-golive");
+    let cfg = crate::config::Config { accounts_only: true, team_files: "edit".into(), ..config(dir.path()) };
+    let mut server = crate::start(&cfg).unwrap();
+    let url = format!("ws://{}/", server.addr());
+    let endpoint = Endpoint::plain(server.addr().to_string());
+    let invite = |admin: bool| {
+        let made = manage::request(&endpoint, &key(dir.path()), vec![Admin::CreateInvite { admin }], &NetLimits::default(), Duration::from_secs(5));
+        let AdminReply::Invite { code, .. } = made.unwrap().remove(0) else { panic!() };
+        code
+    };
+    let account = |name: &str, admin: bool| {
+        let mut s = crate::test_util::session(name);
+        let email = format!("{}@example.com", name.to_lowercase());
+        s.execute("account.join", &json!({"server": url, "code": invite(admin), "email": email, "name": name, "password": "a long password"}))
+            .unwrap();
+        s
+    };
+    let mut ada = account("Ada", true);
+    let mut dee = account("Dee", false);
+    let file = ada.execute("account.publish", &json!({"server": url, "name": "Brand"})).unwrap()["file"].as_str().unwrap().to_string();
+    ada.execute("account.share", &json!({"server": url, "file": file, "email": "dee@example.com", "access": "edit"})).unwrap();
+    // Dee makes a token for an agent that may only comment.
+    let made = dee.execute("account.agentToken", &json!({"server": url, "access": "comment"})).unwrap();
+    let token = made["token"].as_str().unwrap().to_string();
+    let mut agent = crate::test_util::session("Whatever");
+    figcraft_engine::accounts::use_token(&mut agent.prefs, &url, &token);
+    let files = agent.execute("account.files", &json!({})).unwrap();
+    assert_eq!(files["files"][0]["access"], "comment", "at most the token's access: {files}");
+    let e = agent.execute("account.share", &json!({"file": file, "email": "ada@example.com", "access": "view"})).unwrap_err().to_string();
+    assert!(e.contains("agent's token"), "{e}");
+    pump(&mut [&mut ada], "Ada in", |s| live(s[0]));
+    agent.execute("account.open", &json!({"file": file})).unwrap();
+    pump(&mut [&mut ada, &mut agent], "the agent in", |s| live(s[1]) && !s[0].live().peers.is_empty());
+    assert_eq!(agent.live_summary()["access"], "comment");
+    assert_eq!(ada.live().peers.values().next().map(|p| p.name.as_str()), Some("Claude for Dee"), "shows as acting for Dee");
+    // Ending the token disconnects the agent.
+    let id = made["id"].as_str().unwrap();
+    dee.execute("account.revokeAgentToken", &json!({"server": url, "id": id})).unwrap();
+    pump(&mut [&mut ada, &mut agent], "the agent gone", |s| !live(s[1]) && s[0].live().peers.is_empty());
+    // Ada resets Dee's password: Dee is signed out, and the code sets a new one.
+    let users = ada.execute("account.users", &json!({"server": url})).unwrap();
+    let dee_id = users["users"].as_array().unwrap().iter().find(|u| u["email"] == "dee@example.com").unwrap()["id"].clone();
+    let code = ada.execute("account.resetPassword", &json!({"server": url, "id": dee_id})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(dee.execute("account.files", &json!({"server": url})).is_err());
+    assert!(dee.prefs.accounts.is_empty(), "a session the server ended is forgotten");
+    let mut again = crate::test_util::session("Dee");
+    again.execute("account.reset", &json!({"server": url, "code": code, "password": "a new password"})).unwrap();
+    assert!(again.execute("account.reset", &json!({"server": url, "code": code, "password": "another one!"})).is_err(), "used once");
+    again.execute("account.signIn", &json!({"server": url, "email": "dee@example.com", "password": "a new password"})).unwrap();
+    // The team list is off with accounts only, though team_files is set.
+    let mut raw = crate::test_util::Raw::connect(server.addr());
+    raw.send(&ClientMsg::OpenHosting(OpenHosting { protocol: PROTOCOL, client_version: "test".into(), file: String::new(), owner: String::new() }));
+    assert!(matches!(raw.next(), ServerMsg::Hosting(_)));
+    raw.send(&ClientMsg::Admin(Admin::Team));
+    assert!(matches!(raw.next(), ServerMsg::Admin(r) if matches!(*r, AdminReply::Failed { .. })));
+    // The audit log has it all, and no secret.
+    let log = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT)).unwrap();
+    for event in ["signed_in", "member_changed", "agent_token_made", "agent_token_ended", "password_reset_issued", "file_published"] {
+        assert!(log.contains(&format!("\"event\":\"{event}\"")), "{event} missing:\n{log}");
+    }
+    for secret in [token.as_str(), code.as_str(), "a long password", "a new password"] {
+        assert!(!log.contains(secret), "a secret in the audit log");
+    }
+    drop((ada, dee, agent, again, raw));
+    server.stop();
+}

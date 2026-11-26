@@ -47,6 +47,43 @@ pub enum Command {
         command: ConnectCommand,
     },
     Perf(PerfArgs),
+    /// Sign agents (figcraft-cli mcp) in to your team's server, without a password in the chat
+    Account {
+        #[command(subcommand)]
+        command: AccountCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AccountCommand {
+    Login(LoginArgs),
+    /// End the kept token on the server and delete it here
+    Logout,
+    /// Which server and account agents sign in as, checked with the server
+    Status,
+}
+
+/// Sign in once in this terminal; figcraft-cli mcp then works in your files with a limited token
+///
+/// Asks for your email and password (the password isn't shown as you type), makes a token for
+/// agents with them (it opens your files with at most --access, can't share, manage people or
+/// delete, shows as "<label> for <you>", and ends after 30 days), ends the password's session, and
+/// keeps the token in the settings folder, readable only by you. It is never printed.
+/// FIGCRAFT_TOKEN and FIGCRAFT_SERVER, when set, take its place.
+#[derive(Args)]
+pub struct LoginArgs {
+    /// Your team's server, wss://host/ (else FIGCRAFT_SERVER)
+    #[arg(long, value_name = "URL")]
+    pub server: Option<String>,
+    /// Your account's email (asked when left out)
+    #[arg(long)]
+    pub email: Option<String>,
+    /// What agents may do in your files: edit, comment or view
+    #[arg(long, default_value = "edit", value_parser = ["edit", "comment", "view"])]
+    pub access: String,
+    /// How agents show to others ("<label> for <your name>")
+    #[arg(long, default_value = "Claude")]
+    pub label: String,
 }
 
 /// The folders a file subcommand may touch. Without either flag it reads and writes as the user

@@ -46,6 +46,18 @@ impl SignedIn {
     }
 }
 
+/// Use the session `token` on `server` (an agent token from `figcraft-cli account login`, or
+/// `FIGCRAFT_TOKEN`), and make that server the default for `account.*` and `collab.*` commands.
+/// Who it is fills in on the first request.
+pub fn use_token(prefs: &mut crate::Prefs, server: &str, token: &str) {
+    let server = crate::online::plain_server(server);
+    prefs.accounts.retain(|a| !crate::online::same_server(&a.server, &server));
+    prefs
+        .accounts
+        .insert(0, SignedIn { server: server.clone(), token: token.to_string(), id: 0, email: String::new(), name: String::new(), admin: false });
+    prefs.publish_server = server;
+}
+
 /// What asking as nobody says.
 const SIGN_IN_FIRST: &str = "sign in to this server first (account.signIn), or make an account with an invite (account.join)";
 
@@ -75,14 +87,23 @@ fn ask(s: &mut Session, server: &str, auth: AccountAuth, reqs: Vec<AccountReq>) 
     }
 }
 
-/// Keep (or replace) the session for `server`.
+/// Keep (or replace) the session for `server`; the preferences are kept at once when it changed.
 fn remember(s: &mut Session, server: &str, token: String, user: &AccountUser) {
+    let now = SignedIn { server: server.to_string(), token, id: user.id, email: user.email.clone(), name: user.name.clone(), admin: user.admin };
+    if s.prefs.accounts.first() == Some(&now) {
+        return;
+    }
     s.prefs.accounts.retain(|a| !crate::online::same_server(&a.server, server));
-    s.prefs.accounts.insert(
-        0,
-        SignedIn { server: server.to_string(), token, id: user.id, email: user.email.clone(), name: user.name.clone(), admin: user.admin },
-    );
+    s.prefs.accounts.insert(0, now);
     s.prefs.accounts.truncate(MAX_SIGNED_IN);
+    s.prefs_unsaved = true;
+}
+
+/// Forget the session for `server` (signed out, or the server ended it); kept at once.
+fn forget(s: &mut Session, server: &str) {
+    let before = s.prefs.accounts.len();
+    s.prefs.accounts.retain(|a| !crate::online::same_server(&a.server, server));
+    s.prefs_unsaved |= s.prefs.accounts.len() != before;
 }
 
 /// Send `reqs` as the account signed in to the command's server: the replies, each `Failed` turned
@@ -100,8 +121,9 @@ fn as_me(s: &mut Session, cmd: &str, p: &Value, reqs: Vec<AccountReq>) -> Result
             Ok((server, replies))
         }
         Err(e) => {
+            // Signed out, disabled, a reset password or an ended token: the session is gone.
             if e.to_string().contains("signed out") {
-                s.prefs.accounts.retain(|a| !crate::online::same_server(&a.server, &server));
+                forget(s, &server);
             }
             Err(e)
         }
@@ -156,7 +178,7 @@ fn sign_out(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // The server ends the session; it is forgotten here either way.
     let ended = as_me(s, CMD, p, vec![AccountReq::SignOut]).is_ok();
-    s.prefs.accounts.retain(|a| !crate::online::same_server(&a.server, &server));
+    forget(s, &server);
     Ok(json!({"signedOut": true, "serverEnded": ended}))
 }
 
@@ -271,6 +293,52 @@ fn history_of(s: &Session, cmd: &str, p: &Value) -> Result<(Value, String)> {
     Ok((json!({"server": server}), file))
 }
 
+fn me(s: &mut Session, p: &Value) -> Result<Value> {
+    let (server, _) = as_me(s, "account.me", p, vec![AccountReq::Me])?;
+    let shown = signed_in(s, &server).map(SignedIn::shown).unwrap_or(Value::Null);
+    Ok(json!({"server": server, "user": shown}))
+}
+
+fn agent_token(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "account.agentToken";
+    let access = match string(p, "access") {
+        Some(a) => Access::parse(&a).ok_or_else(|| bad(CMD, "`access` is edit, comment or view"))?,
+        None => Access::Edit,
+    };
+    let label = string(p, "label").unwrap_or_default();
+    let (server, replies) = as_me(s, CMD, p, vec![AccountReq::CreateAgentToken { access, label }])?;
+    let Some(AccountReply::AgentToken { id, token, expires }) = replies.first() else {
+        return Err(EngineError::Other("the server answered something else".into()));
+    };
+    Ok(json!({"server": server, "id": id, "token": token, "access": access.id(), "expires": expires}))
+}
+
+fn agent_tokens(s: &mut Session, p: &Value) -> Result<Value> {
+    let (_, replies) = as_me(s, "account.agentTokens", p, vec![AccountReq::AgentTokens])?;
+    let Some(AccountReply::AgentTokens(list)) = replies.first() else { return Err(EngineError::Other("the server answered something else".into())) };
+    let shown = |t: &figcraft_collab::message::AgentTokenInfo| json!({"id": t.id, "label": t.label, "access": t.access.id(), "created": t.created, "expires": t.expires});
+    Ok(json!({"tokens": list.iter().map(shown).collect::<Vec<_>>()}))
+}
+
+fn reset_password(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "account.resetPassword";
+    let id = num(p, "id").filter(|n| *n >= 0.0 && n.fract() == 0.0).ok_or_else(|| bad(CMD, "`id` is an account's id (account.users)"))? as u64;
+    let (server, replies) = as_me(s, CMD, p, vec![AccountReq::ResetPassword { id }])?;
+    let Some(AccountReply::ResetCode { code, expires }) = replies.first() else {
+        return Err(EngineError::Other("the server answered something else".into()));
+    };
+    Ok(json!({"server": server, "id": id, "code": code, "expires": expires}))
+}
+
+fn reset_with_code(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "account.reset";
+    let server = server_of(s, CMD, p)?;
+    let auth = AccountAuth::Reset { code: req_string(CMD, p, "code")?.trim().to_string(), password: req_string(CMD, p, "password")? };
+    let (user, token, _) = ask(s, &server, auth, vec![])?;
+    remember(s, &server, token, &user);
+    Ok(json!({"server": server, "user": user_json(&user)}))
+}
+
 fn version_json(v: &VersionInfo) -> Value {
     json!({"id": v.id, "name": v.name, "description": v.description, "time": v.time, "auto": v.auto, "by": v.by, "editors": v.editors})
 }
@@ -314,8 +382,13 @@ fn change_server_version(s: &mut Session, cmd: &str, p: &Value, rename: bool) ->
 fn fetch_version(s: &mut Session, cmd: &str, p: &Value) -> Result<(VersionInfo, std::sync::Arc<crate::Document>)> {
     let (server, file) = active_file(s).ok_or_else(|| bad(cmd, "open a file from your team's server first (account.open)"))?;
     let id = req_string(cmd, p, "id")?;
-    let (_, mut replies) = as_me(s, cmd, &json!({"server": server}), vec![AccountReq::Version { file, id }])?;
-    let Some(AccountReply::Version { info, snapshot }) = replies.pop() else {
+    let mut reqs = vec![AccountReq::Version { file: file.clone(), id: id.clone() }];
+    // A restore is noted in the server's audit log.
+    if cmd == "account.restoreVersion" {
+        reqs.push(AccountReq::Restored { file, id });
+    }
+    let (_, replies) = as_me(s, cmd, &json!({"server": server}), reqs)?;
+    let Some(AccountReply::Version { info, snapshot }) = replies.into_iter().next() else {
         return Err(EngineError::Other("the server answered something else".into()));
     };
     let replica = Replica::from_snapshot(&snapshot).map_err(|e| EngineError::Other(format!("the version can't be read: {e}")))?;
@@ -461,6 +534,45 @@ pub fn specs() -> Vec<CommandSpec> {
             "{server?, id, admin? (bool), disabled? (bool)}  makes an account an admin or not, or disables it (its sessions end) or enables it again; not your own, and the server keeps one admin (admins)",
             false,
             set_user
+        ),
+        spec!(
+            "account.me",
+            "Who you are on the server",
+            "{server?}  checks the session with the server: {server, user: {server, id, email, name, admin}}",
+            false,
+            me
+        ),
+        spec!(
+            "account.agentToken",
+            "Make a token for an agent",
+            "{server?, access? (edit|comment|view; default edit), label? (default Claude)}  a token an AI agent signs in with for you: it opens your files with at most that access, can't share, manage people, delete or administer, shows as \"<label> for <your name>\", and ends after 30 days. Returns {server, id, token (shown once), access, expires}",
+            false,
+            agent_token
+        ),
+        spec!(
+            "account.agentTokens",
+            "Your agent tokens",
+            "{server?}  {tokens: [{id, label, access, created, expires}]} (never the tokens)",
+            false,
+            agent_tokens
+        ),
+        spec!("account.revokeAgentToken", "End an agent token", "{server?, id}  whoever uses it is disconnected", false, |s, p| {
+            let req = AccountReq::RevokeAgentToken { id: req_string("account.revokeAgentToken", p, "id")? };
+            simple(s, "account.revokeAgentToken", p, req)
+        }),
+        spec!(
+            "account.resetPassword",
+            "Reset someone's password",
+            "{server?, id}  a one-time code (good for a day) that lets the account choose a new password (account.reset); its sessions and agent tokens end now. Returns {server, id, code, expires} (admins)",
+            false,
+            reset_password
+        ),
+        spec!(
+            "account.reset",
+            "Choose a new password with a reset code",
+            "{server?, code (from your admin), password (at least 8 characters)}  sets your password and signs in: {server, user}",
+            false,
+            reset_with_code
         ),
         spec!(
             "account.versions",

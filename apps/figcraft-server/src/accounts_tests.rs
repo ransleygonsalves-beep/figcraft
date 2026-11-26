@@ -22,13 +22,13 @@ fn an_invite_makes_one_account_and_signs_it_in() {
     assert!(signed.user.admin, "an admin invite makes an admin");
     assert!(a.redeem(&code, "bob@example.com", "Bob", "another pass").is_err(), "an invite works once");
     // The session lets them back in; its token and the password aren't on disk, readable.
-    assert_eq!(a.session(&signed.token).map(|(_, u)| u.id), Some(signed.user.id));
+    assert_eq!(a.session(&signed.token).map(|s| s.user.id), Some(signed.user.id));
     let kept = std::fs::read_to_string(dir.path().join(crate::accounts::ACCOUNTS)).unwrap();
     assert!(!kept.contains(&signed.token) && !kept.contains(&code) && !kept.contains("correct horse"));
     assert!(kept.contains("$argon2id$"), "the password is an Argon2id hash");
     // Kept across a restart.
     let mut again = Accounts::load(dir.path()).unwrap();
-    assert_eq!(again.session(&signed.token).map(|(_, u)| u.email), Some("ada@example.com".into()));
+    assert_eq!(again.session(&signed.token).map(|s| s.user.email), Some("ada@example.com".into()));
 }
 
 #[test]
