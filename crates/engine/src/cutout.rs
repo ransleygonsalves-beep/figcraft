@@ -111,6 +111,7 @@ mod native {
     use tract_onnx::prelude::{DatumExt, Framework, InferenceModelExt, IntoRunnable, Tensor, TractResult, TypedRunnableModel, tvec};
 
     use super::{Cut, Job, MODEL_LICENSE, MODEL_SIZE_MB, Phase, Target, set};
+    use crate::file_access;
 
     /// The model, as craft-ai's downloader takes it. `arch` and the tokenizer belong to its
     /// language models and go unused here.
@@ -151,17 +152,21 @@ mod native {
 
     /// Whether the model may be used: it is on disk already, or the user allowed downloading it.
     pub fn ready() -> bool {
-        models_dir().is_some_and(|d| craft_ai::fetch::is_downloaded(&MODEL, &d)) || consent_file().is_some_and(|f| f.is_file())
+        // The model folder is the app's own, never a path a command was given.
+        let allowed = || consent_file().is_some_and(|f| file_access::app_owned(|| file_access::metadata(&f)).is_ok_and(|m| m.is_file()));
+        models_dir().is_some_and(|d| craft_ai::fetch::is_downloaded(&MODEL, &d)) || allowed()
     }
 
     /// Allow downloading the model. Only from the user's own action in the app's window, never
     /// from a command: agents can't.
     pub fn allow_download() -> Result<(), String> {
         let file = consent_file().ok_or_else(|| "this system has no folder for models".to_string())?;
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&file, b"The user allowed FigCraft to download the background removal model.\n").map_err(|e| e.to_string())
+        file_access::app_owned(|| {
+            if let Some(dir) = file.parent() {
+                file_access::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            file_access::write(&file, b"The user allowed FigCraft to download the background removal model.\n").map_err(|e| e.to_string())
+        })
     }
 
     /// The model, loaded once.
