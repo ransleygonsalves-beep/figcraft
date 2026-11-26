@@ -170,7 +170,7 @@ impl Session {
     fn check_preview(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
         let Some((bdoc, _, _, uid)) = before else { return Ok(()) };
         let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
-        if ds.preview.is_none() || Arc::ptr_eq(&ds.doc, bdoc) || id == "version.preview" {
+        if ds.preview.is_none() || Arc::ptr_eq(&ds.doc, bdoc) || matches!(id, "version.preview" | "account.previewVersion") {
             return Ok(());
         }
         Err(EngineError::Disabled(id.to_string(), PREVIEW_READ_ONLY.into()))

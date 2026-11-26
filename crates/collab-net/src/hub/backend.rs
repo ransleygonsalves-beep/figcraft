@@ -181,8 +181,16 @@ pub trait Backend: Send + 'static {
     }
 
     /// A request on an account connection from `ip`, signed in as `user` with session `session`
-    /// (its token's hash); `open` tells about a file that is open.
-    fn account(&mut self, _ip: IpAddr, _user: u64, _session: &str, _req: AccountReq, _open: &dyn Fn(&str) -> Option<OpenFile>) -> AccountHandled {
+    /// (its token's hash); `live` gives the design of a file that is open now, as everyone in it
+    /// sees it (`None` when it isn't open, or can't be read).
+    fn account(
+        &mut self,
+        _ip: IpAddr,
+        _user: u64,
+        _session: &str,
+        _req: AccountReq,
+        _live: &dyn Fn(&str) -> Option<Vec<figcraft_collab::Change>>,
+    ) -> AccountHandled {
         AccountReply::Failed { reason: "accounts live on a figcraft-server".into() }.into()
     }
 

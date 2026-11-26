@@ -1013,6 +1013,33 @@ pub enum AccountReq {
     RenameFile { file: String, name: String },
     /// Delete `file` from the server (its owner or an admin asks); whoever is in it is disconnected.
     RemoveFile { file: String },
+    /// `file`'s version history on the server, newest first (anyone who may open it asks).
+    Versions { file: String },
+    /// Keep `file` as it is now in its history, named (someone who may edit it asks); the
+    /// answer is the history.
+    SaveVersion { file: String, name: String, description: String },
+    /// One version of `file` with its design (anyone who may open it asks).
+    Version { file: String, id: String },
+    /// Rename a version of `file` (its owner or an admin asks); the answer is the history.
+    RenameVersion { file: String, id: String, name: String, description: String },
+    /// Delete a version of `file` (its owner or an admin asks); the answer is the history.
+    DeleteVersion { file: String, id: String },
+}
+
+/// One version in a file's history on the server.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// When it was kept (Unix seconds).
+    pub time: i64,
+    /// Kept automatically (a checkpoint) rather than saved by someone.
+    pub auto: bool,
+    /// Who saved it (empty for a checkpoint).
+    pub by: String,
+    /// Who changed the file since the version before it.
+    pub editors: Vec<String>,
 }
 
 /// An account as the server shows it.
@@ -1082,6 +1109,13 @@ pub enum AccountReply {
     Done,
     Failed {
         reason: String,
+    },
+    /// A file's version history, newest first.
+    Versions(Vec<VersionInfo>),
+    /// One version and its design.
+    Version {
+        info: VersionInfo,
+        snapshot: Vec<Change>,
     },
 }
 

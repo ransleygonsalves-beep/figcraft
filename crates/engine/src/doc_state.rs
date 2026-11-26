@@ -139,8 +139,17 @@ pub const PREVIEW_READ_ONLY: &str = "you're viewing an earlier version: restore 
 
 /// Commands that first end a version preview: they act on the document itself. Saving does so
 /// only with a native destination; export copies and pending format choices keep the preview.
-pub(crate) const ENDS_PREVIEW: &[&str] =
-    &["file.save", "file.saveAs", "file.markSaved", "file.close", "file.revert", "file.saveVersion", "file.duplicate", "version.restore"];
+pub(crate) const ENDS_PREVIEW: &[&str] = &[
+    "file.save",
+    "file.saveAs",
+    "file.markSaved",
+    "file.close",
+    "file.revert",
+    "file.saveVersion",
+    "file.duplicate",
+    "version.restore",
+    "account.restoreVersion",
+];
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
