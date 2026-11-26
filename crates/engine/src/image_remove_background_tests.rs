@@ -1,7 +1,8 @@
 //! `image.removeBackground`: refused without an image or before the user allowed the model; a
 //! finished job's cut-outs go into the paints that still show the images they came from, as one
 //! undo step; the mask keeps the subject's pixels and clears the rest. The model itself isn't run
-//! here (it is a 214 MiB download).
+//! here (it is a 214 MiB download). Desktop only, as the model is.
+#![cfg(not(target_arch = "wasm32"))]
 
 use base64::Engine as _;
 use figcraft_color::PaintKind;

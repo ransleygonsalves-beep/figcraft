@@ -381,7 +381,7 @@ mod id_params_behaviour_tests;
 mod image_crop_tests;
 #[cfg(test)]
 mod image_readable_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod image_remove_background_tests;
 #[cfg(test)]
 mod images_left_in_file_tests;
