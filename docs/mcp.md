@@ -132,6 +132,33 @@ in the app. For renders that come out the same on every machine (CI), start it w
 `figcraft-cli mcp --no-system-fonts` or set `FIGCRAFT_NO_SYSTEM_FONTS=1`: text then uses only the
 built-in fonts. Attached, the app's own fonts apply. The browser build has no system fonts.
 
+## Signing in to your team's server
+
+With accounts on a figcraft-server (see [server.md](server.md#accounts-and-version-history)), an
+agent works in the files shared with you without your password ever reaching the chat. Once, in a
+terminal:
+
+```sh
+figcraft-cli account login --server wss://figcraft.example.com/
+```
+
+It asks for your email and password (the password isn't shown), makes a **token for agents** with
+them and keeps it in FigCraft's settings folder, readable only by you; the password's own session
+ends. The token opens your files with at most `--access` (edit, the default; comment; view), can't
+share, manage people, delete or administer, shows as "Claude for <your name>" (`--label`), and ends
+after 30 days. `figcraft-cli mcp` then signs in with it: `account.files`, `account.open`,
+`account.publish`, `account.versions`, `collab.*` and the rest use that server with no parameters.
+
+`figcraft-cli account status` checks it; `figcraft-cli account logout` ends it on the server and
+deletes it. `FIGCRAFT_TOKEN` and `FIGCRAFT_SERVER` take the kept token's place when set, for a
+token made in the app (Home ▸ Online ▸ **Tokens for agents**):
+
+```sh
+claude mcp add figcraft -e FIGCRAFT_SERVER=wss://figcraft.example.com/ -e FIGCRAFT_TOKEN=… -- figcraft-cli mcp
+```
+
+The token is never printed or logged.
+
 ## Configure a client
 
 Build the CLI first (`cargo build --release -p figcraft-cli`) and use the absolute path to

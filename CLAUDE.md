@@ -23,8 +23,11 @@ section at the top of README.md up to date when a feature, branch or release ste
 
 1. On `designer`: `cargo xtask version set X.Y.Z`, commit.
 2. Tag `vX.Y.Z` and push the branch and the tag to `fork`.
-3. `.github/workflows/designer-release.yml` builds unsigned Windows (`.msi`, portable `.zip`) and a
-   universal macOS `.dmg` (macos-15 runner) into a draft release; publish it on GitHub.
+3. `.github/workflows/designer-release.yml` builds unsigned Windows (`.msi`, portable `.zip`), a
+   universal macOS `.dmg` and `figcraft-cli` zip (macos-15 runner), the browser build
+   (`figcraft-web-<version>.zip`) and the Linux server
+   (`figcraft-server-<version>-linux-x86_64.tar.gz`) into a draft release with `SHA256SUMS.txt`;
+   publish it on GitHub.
 
 The in-app updater (`UPDATE_APP` in `crates/ui-egui/src/lib.rs`) points at the fork; unsigned
 builds get an "update available" notice, not an automatic install. Ask before pushing a tag or
@@ -36,6 +39,9 @@ publishing a release.
 |---|---|
 | Team accounts: sign-in, invites, per-file access by email | Server: `apps/figcraft-server/src/accounts.rs`, `store/members.rs`. Protocol: `AccountReq`/`AccountReply` in `crates/collab/src/message.rs`. Engine: `account.*` in `crates/engine/src/sharing/accounts.rs`. UI: `crates/ui-egui/src/home/accounts.rs` |
 | Version history on the server, with who edited | Server: `apps/figcraft-server/src/store/versions.rs`. Engine: `account.versions`, `account.saveVersion`, `account.previewVersion`, `account.restoreVersion`… UI: `crates/ui-egui/src/panels/versions.rs` (server history for files from your team's server) |
+| Browser sign-in | `crates/collab-net/src/exchange.rs` (`Exchange::account`), `apps/figcraft-web/src/kept.rs` (sessions in local storage) |
+| Agent tokens, `figcraft-cli account login` | Server: `apps/figcraft-server/src/accounts.rs` (`create_agent`, `agent_of`), `store/backend.rs` (`agent_may`). CLI: `apps/figcraft-cli/src/account.rs`. Engine: `accounts::use_token` |
+| Password reset, audit log, team list off with accounts only | `accounts.rs` (`reset_code`, `reset`), `apps/figcraft-server/src/audit.rs`, `store/team.rs` (`team_access`) |
 | Vectorize image, Remove background | `feat/vectorize-image`, `feat/remove-background` |
 | Smooth tool (vector edit mode) | `feat/vector-smooth-tool` |
 | Presenter scroll/hover fixes, opens at 100% | `fix/present-scroll-hover-actual` |
@@ -54,6 +60,11 @@ User-facing docs for accounts: `docs/server.md#accounts-and-version-history`.
 - Version authorship comes from the names of the people whose changes the session accepted
   (`note_editors`); checkpoints happen in `changed` (every 30 minutes), `idle` (everyone left) and
   `stop`.
+- An agent token is limited by the server, not the client: `agent_may` decides what it may ask,
+  `admit` caps its access and names it "<label> for <name>". Never print a token or write one to
+  the audit log; the CLI keeps it only in the owner-only settings file.
+- Release builds read the repository variable `FIGCRAFT_DEFAULT_SERVER` (the team's `wss://` URL);
+  unset, they have no default server rather than the public one.
 
 ## Testing notes
 

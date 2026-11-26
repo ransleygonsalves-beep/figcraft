@@ -396,13 +396,49 @@ password.
   restores versions (restoring needs edit access and changes the file for everyone in it); its
   owner or an admin renames and deletes them. At most 20 checkpoints and 100 versions per file;
   named versions are never dropped to make room.
-- **Wrong passwords and invite codes** count like wrong join codes: too many from an address lock
-  it out for a while.
+- **Wrong passwords, invite codes and reset codes** count like wrong join codes: too many from an
+  address lock it out for a while.
+- **Forgotten passwords.** An admin chooses **Reset password** for the account in **People and
+  invites**: a one-time code good for a day, shown once. The account is signed out everywhere
+  (its agent tokens end too) and keeps its files. They choose a new password with Home ▸ Online ▸
+  **I have a reset code**.
+- **Agents (Claude over MCP).** An agent signs in with a token for agents, never your password:
+  `figcraft-cli account login --server wss://figcraft.example.com/` asks for your email and
+  password once in the terminal and keeps such a token for `figcraft-cli mcp` (see
+  [docs/mcp.md](mcp.md#signing-in-to-your-teams-server)); **Tokens for agents** in Home ▸ Online
+  makes one to copy. A token opens your files with at most the access you chose (edit, comment or
+  view), may publish and save versions with edit access, can't share, change who opens a file,
+  delete or administer, and ends 30 days after it was made (sessions otherwise end after 90 days
+  unused). Others see its cursor, and the version history its edits, as "Claude for <your name>"
+  (the token's label). Ending a token disconnects whoever uses it.
+- **Lowered access** disconnects whoever is in the file with more than they may now do (they join
+  again with what they may do); raised access waits until they join again.
+
+### The browser
+
+The browser build signs in too (Home ▸ Online): the page keeps your session, never your password,
+in its local storage for that server's address, so a reload stays signed in; **Sign out**, or the
+server ending the session, removes it. The session's token travels inside the WebSocket's first
+message, never in an address. Serve the page and the server under the same `wss://` site (see
+[the reverse proxy](#behind-a-reverse-proxy-tls)).
+
+### The audit log
+
+`<data>/audit.log` (readable only by the server's user) has one JSON line per sign-in, refused
+sign-in, invite, account made, password change or reset, agent token made or ended, change of who
+may open a file, file published or deleted, version deleted or restored, and account change, with
+the account's id and the address it came from: `{"time": …, "event": "member_changed", "account":
+1, "ip": "203.0.113.7", "file": "…", "member": "dee@example.com", "access": "edit"}`. Passwords,
+codes and tokens are never written. Past 16 MiB it moves to `audit.log.1` and starts again.
+
+### Going live with accounts only
 
 Signing in sends a password, so anyone outside your own machine should reach the server through
 [a TLS reverse proxy](#behind-a-reverse-proxy-tls) (`wss://`). With `accounts_only = true` share
-links and join codes stop working, and accounts are the only way in. The app's commands for all of
-this are `account.*` (`figcraft-cli commands`).
+links and join codes stop working, accounts are the only way in, and the
+[team list](#the-team-list) is off even with `team_files` set (the server warns at startup), so
+nobody who merely reaches the server sees a file name. The app's commands for all of this are
+`account.*` (`figcraft-cli commands`).
 
 ## The data directory
 
