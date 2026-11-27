@@ -8,6 +8,48 @@ use super::{
     Server, Store, disk, hash, now, same_secret,
 };
 
+/// The most audit events an admin reads at once.
+const MAX_ACTIVITY: u32 = 500;
+
+impl Store {
+    /// The latest `limit` audit events as an admin reads them: who by name and email, the rest of
+    /// each event as `key: value` pairs.
+    fn activity(&self, limit: u32) -> Vec<figcraft_collab::message::ActivityEntry> {
+        let limit = limit.clamp(1, MAX_ACTIVITY) as usize;
+        self.audit
+            .recent(limit)
+            .into_iter()
+            .map(|e| {
+                let who = e["account"].as_u64().and_then(|id| self.accounts.user(id)).map(|u| format!("{} ({})", u.name, u.email));
+                let detail = e
+                    .as_object()
+                    .map(|o| {
+                        o.iter()
+                            .filter(|(k, v)| !matches!(k.as_str(), "time" | "event" | "account" | "ip") && !v.is_null())
+                            .map(|(k, v)| {
+                                let text = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                                // A file is named as it is called now (its id after it).
+                                match self.files.get(&text).filter(|_| k == "file") {
+                                    Some(f) => format!("{k}: {} ({text})", f.meta.name),
+                                    None => format!("{k}: {text}"),
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                figcraft_collab::message::ActivityEntry {
+                    time: e["time"].as_i64().unwrap_or(0),
+                    event: e["event"].as_str().unwrap_or_default().to_string(),
+                    who: who.unwrap_or_default(),
+                    ip: e["ip"].as_str().unwrap_or_default().to_string(),
+                    detail,
+                }
+            })
+            .collect()
+    }
+}
+
 /// What a used or made-up reset code says.
 const RESET_GONE: &str = "this reset code doesn't work: it was used or is too old; ask your admin for a new one";
 /// What an agent's token asking for more than it may says.
@@ -43,6 +85,7 @@ fn account_changes(req: &AccountReq) -> bool {
             | AccountReq::Versions { .. }
             | AccountReq::Version { .. }
             | AccountReq::AgentTokens
+            | AccountReq::Activity { .. }
     )
 }
 
@@ -544,6 +587,7 @@ impl Backend for Store {
                 }
                 Err(e) => failed(e),
             },
+            AccountReq::Activity { limit } => AccountReply::Activity(self.activity(limit)).into(),
             AccountReq::ResetPassword { id } => match self.accounts.reset_code(user, id) {
                 // Its sessions ended: whoever is signed in as it is disconnected.
                 Ok((code, expires)) => {

@@ -41,6 +41,7 @@ publishing a release.
 | Version history on the server, with who edited | Server: `apps/figcraft-server/src/store/versions.rs`. Engine: `account.versions`, `account.saveVersion`, `account.previewVersion`, `account.restoreVersion`… UI: `crates/ui-egui/src/panels/versions.rs` (server history for files from your team's server) |
 | Browser sign-in | `crates/collab-net/src/exchange.rs` (`Exchange::account`), `apps/figcraft-web/src/kept.rs` (sessions in local storage) |
 | Agent tokens, `figcraft-cli account login` | Server: `apps/figcraft-server/src/accounts.rs` (`create_agent`, `agent_of`), `store/backend.rs` (`agent_may`). CLI: `apps/figcraft-cli/src/account.rs`. Engine: `accounts::use_token` |
+| Admin panel (People, Invites, Files, Activity), Change password | `crates/ui-egui/src/home/accounts.rs` (`people` and its tabs); `account.activity` reads the audit log (`Store::activity`) |
 | Password reset, audit log, team list off with accounts only | `accounts.rs` (`reset_code`, `reset`), `apps/figcraft-server/src/audit.rs`, `store/team.rs` (`team_access`) |
 | Vectorize image, Remove background | `feat/vectorize-image`, `feat/remove-background` |
 | Smooth tool (vector edit mode) | `feat/vector-smooth-tool` |
