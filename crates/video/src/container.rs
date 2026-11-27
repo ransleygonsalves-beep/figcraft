@@ -20,9 +20,9 @@ pub struct Info {
     pub frames: u32,
 }
 
-/// What a video with B-frames says: the decoder (Cisco's OpenH264, made for video calls) reads
-/// H.264 without them only.
-pub const B_FRAMES: &str = "this video uses B-frames, which FigCraft can't play yet: export it again as H.264 without B-frames (in HandBrake: Video, then Encoder options, Profile Main and \"bframes=0\" in Advanced; in ffmpeg: -bf 0)";
+/// What a video only the system's decoder reads says where there is none (Linux, where Cisco's
+/// OpenH264, made for video calls, reads H.264 without B-frames only).
+pub const B_FRAMES: &str = "this video uses B-frames or HEVC, which FigCraft can only play with Windows' or macOS's own video decoding: export it again as H.264 without B-frames (in ffmpeg: -c:v libx264 -bf 0)";
 
 /// Whether `bytes` look like an MP4 (or QuickTime) file: an `ftyp` box first.
 pub fn is_mp4(bytes: &[u8]) -> bool {
@@ -56,9 +56,12 @@ pub struct Clip {
     /// Each sample (frame, in decoding order): when it shows (seconds) and whether decoding may
     /// start there (a key frame).
     pub(crate) samples: Vec<(f64, bool)>,
-    /// The track's parameter sets (without start codes).
+    /// The track's parameter sets (without start codes; empty for HEVC).
     pub(crate) sps: Vec<u8>,
     pub(crate) pps: Vec<u8>,
+    /// Frames shown in another order than they decode (B-frames), or HEVC: what only the
+    /// system's decoder reads ([`crate::Player`]).
+    pub(crate) needs_system: bool,
 }
 
 impl Clip {
@@ -70,17 +73,25 @@ impl Clip {
         let size = bytes.len() as u64;
         let mut reader = Mp4Reader::read_header(Cursor::new(bytes.as_slice()), size).map_err(|e| format!("the video can't be read: {e}"))?;
         let found = reader.tracks().values().find(|t| t.track_type().ok() == Some(TrackType::Video)).map(|t| {
-            let avc = t.media_type().ok() == Some(MediaType::H264);
+            let avc = match t.media_type().ok() {
+                Some(MediaType::H264) => Some(false),
+                Some(MediaType::H265) => Some(true),
+                _ => None,
+            };
             let ps = (t.sequence_parameter_set().map(<[u8]>::to_vec), t.picture_parameter_set().map(<[u8]>::to_vec));
             (t.track_id(), avc, u32::from(t.width()), u32::from(t.height()), t.timescale(), t.sample_count(), ps)
         });
-        let Some((track, avc, width, height, timescale, count, (sps, pps))) = found else {
+        let Some((track, kind, width, height, timescale, count, (sps, pps))) = found else {
             return Err("the file has no video track".into());
         };
-        if !avc {
-            return Err("only H.264 videos can be used (the most common kind: re-export it as H.264 MP4)".into());
-        }
-        let (Ok(sps), Ok(pps)) = (sps, pps) else { return Err("the video's H.264 settings are missing".into()) };
+        // Anything but H.264 (HEVC, and codecs these boxes don't name) only the system's
+        // decoder may play: it says whether it can when the video opens.
+        let hevc = kind.unwrap_or(true);
+        let (sps, pps) = match (sps, pps) {
+            (Ok(s), Ok(p)) => (s, p),
+            _ if hevc => (Vec::new(), Vec::new()),
+            _ => return Err("the video's H.264 settings are missing".into()),
+        };
         if width == 0 || height == 0 || width > MAX_SIDE || height > MAX_SIDE {
             return Err(format!("the video is {width} × {height}: at most {MAX_SIDE} pixels a side"));
         }
@@ -100,15 +111,12 @@ impl Clip {
             end = end.max((s.start_time as f64 + f64::from(s.duration)) / scale);
             samples.push((shows, s.is_sync));
         }
-        if reordered {
-            return Err(B_FRAMES.into());
-        }
         if !samples.first().is_some_and(|s| s.1) {
             return Err("the video doesn't start with a key frame".into());
         }
         let duration = end.max(1.0 / 1000.0);
         let info = Info { width, height, duration, fps: f64::from(count) / duration, frames: count };
-        Ok(Clip { bytes, track, info, samples, sps, pps })
+        Ok(Clip { bytes, track, info, samples, sps, pps, needs_system: reordered || hevc })
     }
 
     /// The frame (in showing order) to show `t` seconds in (looping past the end).

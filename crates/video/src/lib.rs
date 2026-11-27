@@ -15,6 +15,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod codec;
 mod container;
+#[cfg(windows)]
+mod system_windows;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use codec::{Player, Writer, codec_ready, set_codec};

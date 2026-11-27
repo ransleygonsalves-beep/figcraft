@@ -41,9 +41,63 @@ fn api() -> Result<OpenH264API, String> {
     OpenH264API::from_blob_path(path).map_err(|e| format!("the H.264 codec can't be used: {e}"))
 }
 
-/// A clip's frames on demand. Decoding starts at the key frame at or before the frame asked for,
-/// and carries on from where it is when the next frame asked for lies ahead (playback).
+/// A clip's frames on demand: through the operating system's own decoder where there is one
+/// (any video it plays), else Cisco's OpenH264 (H.264 without B-frames).
 pub struct Player {
+    clip: Clip,
+    inner: Inner,
+}
+
+enum Inner {
+    #[cfg(windows)]
+    System(crate::system_windows::SystemVideo),
+    Codec(Box<H264Player>),
+}
+
+impl Player {
+    pub fn new(clip: Clip) -> Result<Player, String> {
+        #[cfg(windows)]
+        match crate::system_windows::SystemVideo::open(clip.bytes.clone()) {
+            Ok(v) => return Ok(Player { clip, inner: Inner::System(v) }),
+            Err(e) if clip.needs_system => return Err(e),
+            Err(_) => {}
+        }
+        if clip.needs_system {
+            return Err(crate::B_FRAMES.into());
+        }
+        let p = H264Player::new(clip.clone())?;
+        Ok(Player { clip, inner: Inner::Codec(Box::new(p)) })
+    }
+
+    pub fn clip(&self) -> &Clip {
+        &self.clip
+    }
+
+    /// Whether the operating system decodes it.
+    pub fn system(&self) -> bool {
+        !matches!(self.inner, Inner::Codec(_))
+    }
+
+    /// The frame to show `t` seconds in (looping).
+    pub fn frame_at(&mut self, t: f64) -> Result<Frame, String> {
+        let k = self.clip.frame_at(t);
+        self.frame(k)
+    }
+
+    /// Frame `k` in showing order.
+    pub fn frame(&mut self, k: usize) -> Result<Frame, String> {
+        match &mut self.inner {
+            #[cfg(windows)]
+            // The middle of the frame's time, so rounding never lands on its neighbour.
+            Inner::System(v) => v.frame_at((k as f64 + 0.5) / self.clip.info.fps),
+            Inner::Codec(p) => p.frame(k),
+        }
+    }
+}
+
+/// Cisco's decoder over a clip. Decoding starts at the key frame at or before the frame asked
+/// for, and carries on from where it is when the next frame asked for lies ahead (playback).
+struct H264Player {
     clip: Clip,
     reader: Reader,
     /// Each sample's place in showing order.
@@ -56,29 +110,19 @@ pub struct Player {
     last: Option<(usize, Frame)>,
 }
 
-impl Player {
-    pub fn new(clip: Clip) -> Result<Player, String> {
+impl H264Player {
+    fn new(clip: Clip) -> Result<H264Player, String> {
         let order = clip.showing_order();
         let mut rank = vec![0; order.len()];
         for (k, s) in order.iter().enumerate() {
             rank[*s] = k;
         }
         let reader = clip.reader()?;
-        Ok(Player { clip, reader, rank, decoder: None, next: 0, shown: 0, last: None })
-    }
-
-    pub fn clip(&self) -> &Clip {
-        &self.clip
-    }
-
-    /// The frame to show `t` seconds in (looping).
-    pub fn frame_at(&mut self, t: f64) -> Result<Frame, String> {
-        let k = self.clip.frame_at(t);
-        self.frame(k)
+        Ok(H264Player { clip, reader, rank, decoder: None, next: 0, shown: 0, last: None })
     }
 
     /// Frame `k` in showing order.
-    pub fn frame(&mut self, k: usize) -> Result<Frame, String> {
+    fn frame(&mut self, k: usize) -> Result<Frame, String> {
         if let Some((i, f)) = &self.last
             && *i == k
         {

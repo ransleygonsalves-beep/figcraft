@@ -6,8 +6,25 @@ license.workspace = true
 rust-version.workspace = true
 description = "FigCraft video: reading MP4 files (size, length, frames) and writing them, H.264 through Cisco's OpenH264 library downloaded at runtime"
 
-[lints]
-workspace = true
+# The workspace's lints, but `unsafe_code` denied instead of forbidden: the platform decoders
+# (system_windows.rs, system_macos.rs) call the operating system and allow it there alone. The
+# fork's only exception to the rule (see CLAUDE.md, This fork).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+needless_range_loop = "allow"
+chunks_exact_to_as_chunks = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
 
 [dependencies]
 # MP4 boxes, read and written (MIT).
@@ -18,3 +35,14 @@ bytes = "1"
 # H.264: Cisco's own OpenH264 build, loaded at runtime (BSD-2-Clause bindings; the library is
 # Cisco's binary, which carries its H.264 patent licence). Never compiled into FigCraft.
 openh264 = { version = "0.9.10", default-features = false, features = ["libloading"] }
+
+# Windows' own decoders (Media Foundation), as Edge uses them.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell",
+] }

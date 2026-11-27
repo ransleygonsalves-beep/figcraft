@@ -1,7 +1,7 @@
 //! Reading what isn't a usable MP4 is refused with a reason. With Cisco's OpenH264 library
 //! (`FIGCRAFT_OPENH264` names it; without it these skip), frames written come back: the file says
 //! its size, length and rate, any frame decodes (forwards, backwards, by time) close to what was
-//! written, and odd sides are cropped even.
+//! written (on Windows through its own decoder), and odd sides are cropped even.
 
 use crate::{Frame, is_mp4, probe};
 
@@ -69,6 +69,8 @@ mod with_codec {
         }
         let half = p.frame_at(0.5).unwrap();
         assert!(close(centre(&half), want(15)), "half way in: {:?}", centre(&half));
+        // Windows plays it through its own decoder (Media Foundation).
+        assert_eq!(p.system(), cfg!(windows));
         let looped = p.frame_at(1.25).unwrap();
         assert!(close(centre(&looped), centre(&p.frame_at(0.25).unwrap())), "past the end it loops");
     }

@@ -2601,6 +2601,7 @@ dependencies = [
  "bytes",
  "mp4",
  "openh264",
+ "windows",
 ]
 
 [[package]]
