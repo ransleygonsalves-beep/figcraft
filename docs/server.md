@@ -380,7 +380,7 @@ password.
 - **The first admin.** On the server's machine, `figcraft-server invite --admin` prints a one-time
   code. In the app: Home ▸ Online ▸ **I have an invite**, with the server's address, the code, a
   name, an email and a password (at least 8 characters). That account is an admin.
-- **Inviting people.** An admin opens Home ▸ Online ▸ **People and invites** and makes an invite
+- **Inviting people.** An admin opens Home ▸ Online ▸ **Admin** ▸ Invites and makes an invite
   (an admin one, or not): a code that works once, for 7 days, shown once. The server sends no
   email: pass the code and the server's address on yourself. Unused invites can be withdrawn.
 - **Admins** see every file, make or unmake other admins and disable accounts (disabled accounts
@@ -398,8 +398,8 @@ password.
   named versions are never dropped to make room.
 - **Wrong passwords, invite codes and reset codes** count like wrong join codes: too many from an
   address lock it out for a while.
-- **Forgotten passwords.** An admin chooses **Reset password** for the account in **People and
-  invites**: a one-time code good for a day, shown once. The account is signed out everywhere
+- **Forgotten passwords.** An admin chooses **Reset password** for the account in **Admin** ▸
+  People: a one-time code good for a day, shown once. The account is signed out everywhere
   (its agent tokens end too) and keeps its files. They choose a new password with Home ▸ Online ▸
   **I have a reset code**.
 - **Agents (Claude over MCP).** An agent signs in with a token for agents, never your password:
@@ -421,6 +421,15 @@ in its local storage for that server's address, so a reload stays signed in; **S
 server ending the session, removes it. The session's token travels inside the WebSocket's first
 message, never in an address. Serve the page and the server under the same `wss://` site (see
 [the reverse proxy](#behind-a-reverse-proxy-tls)).
+
+### The admin panel
+
+Home ▸ Online ▸ **Admin** (admins only) has four tabs. **People**: search by name or email; make
+someone an admin, disable them (they are disconnected at once) or reset their password.
+**Invites**: make an invite and copy its code; see the open ones and withdraw them. **Files**:
+every file on the server, to open, share, rename or delete (with its history). **Activity**: the
+latest events of the audit log, newest first, with who and from where. Everyone can change their
+own password from Home ▸ Online ▸ **Change password**; their other sign-ins end.
 
 ### The audit log
 

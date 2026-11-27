@@ -330,6 +330,14 @@ fn reset_password(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"server": server, "id": id, "code": code, "expires": expires}))
 }
 
+fn activity(s: &mut Session, p: &Value) -> Result<Value> {
+    let limit = num(p, "limit").filter(|n| *n >= 1.0).map_or(100, |n| n.min(500.0) as u32);
+    let (_, replies) = as_me(s, "account.activity", p, vec![AccountReq::Activity { limit }])?;
+    let Some(AccountReply::Activity(list)) = replies.first() else { return Err(EngineError::Other("the server answered something else".into())) };
+    let shown = |e: &figcraft_collab::message::ActivityEntry| json!({"time": e.time, "event": e.event, "who": e.who, "ip": e.ip, "detail": e.detail});
+    Ok(json!({"events": list.iter().map(shown).collect::<Vec<_>>()}))
+}
+
 fn reset_with_code(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "account.reset";
     let server = server_of(s, CMD, p)?;
@@ -566,6 +574,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{server?, id}  a one-time code (good for a day) that lets the account choose a new password (account.reset); its sessions and agent tokens end now. Returns {server, id, code, expires} (admins)",
             false,
             reset_password
+        ),
+        spec!(
+            "account.activity",
+            "Server activity",
+            "{server?, limit? (default 100, at most 500)}  the latest events of the server's audit log, newest first: {events: [{time, event (signed_in, sign_in_refused, member_changed, file_deleted, …), who (name and email), ip, detail}]} (admins)",
+            false,
+            activity
         ),
         spec!(
             "account.reset",

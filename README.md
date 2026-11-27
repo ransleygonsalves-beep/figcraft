@@ -78,7 +78,7 @@
 >
 > **Set up your team:** run `figcraft-server` where everyone can reach it ([deploying](docs/server.md#deploy-on-a-linux-server),
 > [TLS](docs/server.md#behind-a-reverse-proxy-tls)), then `figcraft-server invite --admin` and, in
-> the app, Home ▸ Online ▸ **I have an invite**. Invite your designers from **People and invites**
+> the app, Home ▸ Online ▸ **I have an invite**. Invite your designers from **Admin**
 > and send them the code with the server's address.
 >
 > **Branches:** `designer` is what ships, `combined` brings the features together, and each
