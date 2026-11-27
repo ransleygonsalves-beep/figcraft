@@ -71,44 +71,123 @@ pub fn tint(t: Tokens) -> Tokens {
     }
 }
 
-/// The card, while the reminder is due: bottom centre, above the toasts, until answered.
+/// The card's colours: deep navy, and two waters (the back wave lighter) dark enough that the
+/// white title and pale body text keep 4.5:1 on them.
+const CARD: Color32 = Color32::from_rgb(0x0E, 0x2A, 0x4A);
+const WATER_BACK: Color32 = Color32::from_rgb(0x27, 0x63, 0xA3);
+const WATER_FRONT: Color32 = Color32::from_rgb(0x19, 0x4D, 0x86);
+const BODY_TEXT: Color32 = Color32::from_rgb(0xD6, 0xE7, 0xF8);
+const RADIUS: f32 = 10.0;
+/// How full the card gets, and how long it takes to fill (seconds).
+const FULL: f32 = 0.55;
+const FILL_SECS: f64 = 1.8;
+
+/// The card, while the reminder is due: bottom centre, above the toasts, until answered. Water
+/// fills it from the bottom like a glass, waves drifting on top and bubbles rising; with reduce
+/// motion it is still water, already full.
 pub fn card(app: &mut FigApp, ctx: &egui::Context) {
+    let shown_id = egui::Id::unique("water_reminder_shown");
     if !app.ui.water.due {
+        ctx.data_mut(|d| d.remove::<f64>(shown_id));
         return;
     }
+    let now = ctx.input(|i| i.time);
+    let still = app.reduce_motion();
+    let shown = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(shown_id, || now));
+    let (level, t) = if still {
+        (FULL, 0.0)
+    } else {
+        let k = ((now - shown) / FILL_SECS).clamp(0.0, 1.0) as f32;
+        (FULL * (1.0 - (1.0 - k).powi(3)), now as f32)
+    };
     let screen = ctx.content_rect();
     let mut answered = false;
-    egui::Area::new(egui::Id::new("water_reminder"))
+    egui::Area::new(egui::Id::unique("water_reminder"))
         .fixed_pos(egui::pos2(screen.center().x, screen.max.y - 150.0))
         .pivot(egui::Align2::CENTER_BOTTOM)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(Color32::from_rgb(0x0E, 0x2A, 0x4A))
-                .corner_radius(egui::CornerRadius::same(10))
-                .inner_margin(egui::Margin::symmetric(16, 12))
-                .show(ui, |ui| {
-                    ui.set_max_width(360.0);
-                    let title = tr("Have you had some water?");
-                    let r = ui.label(RichText::new(title).font(semibold(13.0)).color(Color32::WHITE));
-                    crate::a11y::alert(&r, title);
-                    ui.label(
-                        RichText::new(tr("You've been designing for an hour. A glass of water helps you stay sharp."))
-                            .font(regular(11.0))
-                            .color(Color32::from_rgb(0xD6, 0xE7, 0xF8)),
-                    );
-                    ui.add_space(8.0);
-                    answered = crate::widgets::button(ui, tr("I've had some"), true, true).clicked();
-                });
+            let under = ui.painter().add(egui::Shape::Noop);
+            let frame = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
+                ui.set_width(340.0);
+                let title = tr("Have you had some water?");
+                let r = ui.label(RichText::new(title).font(semibold(13.0)).color(Color32::WHITE));
+                crate::a11y::alert(&r, title);
+                ui.label(
+                    RichText::new(tr("You've been designing for an hour. A glass of water helps you stay sharp."))
+                        .font(regular(11.0))
+                        .color(BODY_TEXT),
+                );
+                ui.add_space(8.0);
+                answered = crate::widgets::button(ui, tr("I've had some"), true, true).clicked();
+            });
+            ui.painter().set(under, glass(frame.response.rect, level, t));
         });
     if answered {
-        app.ui.water.answer(ctx.input(|i| i.time));
+        app.ui.water.answer(now);
+    } else if !still {
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
+}
+
+/// The card's background with water `level` (0 empty – 1 full) in it at time `t` (seconds).
+fn glass(rect: egui::Rect, level: f32, t: f32) -> egui::Shape {
+    let mut shapes = vec![egui::Shape::rect_filled(rect, RADIUS, CARD)];
+    shapes.push(egui::Shape::mesh(water(rect, level, t * 1.3 + 1.7, 3.5, WATER_BACK)));
+    shapes.push(egui::Shape::mesh(water(rect, level - 0.03, -t * 1.9, 4.5, WATER_FRONT)));
+    // Bubbles rise through the water and fade as they reach the surface.
+    let surface = rect.max.y - rect.height() * level;
+    for k in 0..5u8 {
+        let k = f32::from(k);
+        let p = ((t + k * 0.9) / (2.6 + k * 0.55)).fract();
+        let x = rect.min.x + rect.width() * (0.14 + 0.18 * k) + (t * 2.0 + k).sin() * 3.0;
+        let y = rect.max.y - 6.0 - p * (rect.max.y - 6.0 - surface);
+        if y > surface + 4.0 {
+            let alpha = ((1.0 - p) * 120.0) as u8;
+            shapes.push(egui::Shape::circle_stroke(egui::pos2(x, y), 1.5 + k % 3.0, egui::Stroke::new(1.0, Color32::from_white_alpha(alpha))));
+        }
+    }
+    egui::Shape::Vec(shapes)
+}
+
+/// Water filling `rect` to `level` with a wave of `amp` pixels on top at `phase`: thin columns
+/// from the wave down to the card's rounded bottom, so it stays inside the corners.
+fn water(rect: egui::Rect, level: f32, phase: f32, amp: f32, color: Color32) -> egui::Mesh {
+    let mut mesh = egui::Mesh::default();
+    if level <= 0.0 {
+        return mesh;
+    }
+    let base = rect.max.y - rect.height() * level.min(1.0);
+    let bottom = |x: f32| {
+        let d = (x - rect.min.x).min(rect.max.x - x);
+        if d >= RADIUS {
+            rect.max.y
+        } else {
+            let o = RADIUS - d.max(0.0);
+            rect.max.y - RADIUS + (RADIUS * RADIUS - o * o).max(0.0).sqrt()
+        }
+    };
+    let steps = (rect.width() / 3.0).ceil().max(1.0) as u32;
+    for i in 0..=steps {
+        let u = i as f32 / steps as f32;
+        let x = rect.min.x + rect.width() * u;
+        let wave = (u * 9.0 + phase).sin() * amp + (u * 4.0 - phase * 0.6).sin() * amp * 0.4;
+        let low = bottom(x);
+        let top = (base + wave).clamp(rect.min.y, low);
+        mesh.colored_vertex(egui::pos2(x, top), color);
+        mesh.colored_vertex(egui::pos2(x, low), color);
+        if i > 0 {
+            let n = 2 * i;
+            mesh.add_triangle(n - 2, n - 1, n);
+            mesh.add_triangle(n - 1, n + 1, n);
+        }
+    }
+    mesh
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AFTER_SECS, Water, tint};
+    use super::{AFTER_SECS, BODY_TEXT, CARD, RADIUS, WATER_BACK, WATER_FRONT, Water, tint, water};
     use crate::theme::Tokens;
 
     #[test]
@@ -145,5 +224,35 @@ mod tests {
                 assert!(ratio(b.text, bg) >= 4.5, "text on {bg:?}: {:.2}", ratio(b.text, bg));
             }
         }
+        // The card's text over its water.
+        for bg in [CARD, WATER_BACK, WATER_FRONT] {
+            for fg in [egui::Color32::WHITE, BODY_TEXT] {
+                assert!(ratio(fg, bg) >= 4.5, "{fg:?} on {bg:?}: {:.2}", ratio(fg, bg));
+            }
+        }
+    }
+
+    /// The water stays inside the card and its rounded bottom corners whatever the wave, and
+    /// more water stands higher.
+    #[test]
+    fn the_water_stays_in_the_card_and_rises() {
+        let card = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(300.0, 120.0));
+        let corners = [egui::pos2(card.min.x + RADIUS, card.max.y - RADIUS), egui::pos2(card.max.x - RADIUS, card.max.y - RADIUS)];
+        for phase in [0.0, 1.0, 2.5] {
+            let m = water(card, 0.55, phase, 4.5, CARD);
+            assert!(!m.indices.is_empty());
+            for v in &m.vertices {
+                assert!(card.expand(1e-3).contains(v.pos), "{:?} outside the card", v.pos);
+                for c in corners {
+                    let outward = if c.x < card.center().x { v.pos.x < c.x } else { v.pos.x > c.x };
+                    if outward && v.pos.y > c.y {
+                        assert!(v.pos.distance(c) <= RADIUS + 1e-3, "{:?} past the rounded corner", v.pos);
+                    }
+                }
+            }
+        }
+        let surface = |level: f32| water(card, level, 0.0, 4.0, CARD).vertices.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
+        assert!(surface(0.5) < surface(0.2), "more water stands higher");
+        assert!(water(card, 0.0, 0.0, 4.0, CARD).vertices.is_empty(), "no water, nothing drawn");
     }
 }
