@@ -172,6 +172,7 @@ impl<'a> Walker<'a> {
                 EffectKind::Noise(_) => Warn::Noise,
                 EffectKind::Texture(_) => Warn::Texture,
                 EffectKind::Glass(_) => Warn::Glass,
+                EffectKind::Perspective(_) => Warn::Perspective,
             };
             self.note(w, n);
         }

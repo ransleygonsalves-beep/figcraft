@@ -45,6 +45,7 @@ publishing a release.
 | Password reset, audit log, team list off with accounts only | `accounts.rs` (`reset_code`, `reset`), `apps/figcraft-server/src/audit.rs`, `store/team.rs` (`team_access`) |
 | Vectorize image, Remove background | `feat/vectorize-image`, `feat/remove-background` |
 | Smooth tool (vector edit mode) | `feat/vector-smooth-tool` |
+| Perspective effect (tilt a layer) | `feat/perspective-effect`: `figcraft_doc::Perspective`, `crates/render/src/perspective.rs` (draw flat, then warp) |
 | Presenter scroll/hover fixes, opens at 100% | `fix/present-scroll-hover-actual` |
 
 User-facing docs for accounts: `docs/server.md#accounts-and-version-history`.

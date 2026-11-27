@@ -249,6 +249,11 @@ impl<'d> Exporter<'d> {
                 self.warn("glass effects keep only their frost");
                 f.extend([("type", e("GLASS")), ("radius", fl(g.sanitized().frost))]);
             }
+            // The format has no tilt: a hidden blur of nothing keeps the list's order and indices.
+            EffectKind::Perspective(_) => {
+                self.warn("perspective effects were left out (the format has none): the layers are written untilted");
+                f = vec![("visible", b(false)), ("type", e("FOREGROUND_BLUR")), ("radius", fl(0.0))];
+            }
         }
         o(f)
     }

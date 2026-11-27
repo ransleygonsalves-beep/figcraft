@@ -22,12 +22,12 @@ fn effect_add_takes_every_type() {
     s.execute("effect.add", &json!({"ids": [r], "type": "GLASS"})).unwrap();
     let n = s.doc().unwrap().node(r).unwrap();
     let labels: Vec<&str> = n.effects.iter().map(Effect::label).collect();
-    assert_eq!(labels, vec!["Drop shadow", "Inner shadow", "Layer blur", "Background blur", "Noise", "Texture", "Glass", "Glass"]);
+    assert_eq!(labels, vec!["Drop shadow", "Inner shadow", "Layer blur", "Background blur", "Noise", "Texture", "Glass", "Perspective", "Glass"]);
     let err = s.execute("effect.add", &json!({"ids": [r], "type": "sparkle"})).unwrap_err();
     assert!(err.to_string().contains("sparkle"), "{err}");
     // Undo removes one at a time.
     s.undo().unwrap();
-    assert_eq!(s.doc().unwrap().node(r).unwrap().effects.len(), 7);
+    assert_eq!(s.doc().unwrap().node(r).unwrap().effects.len(), 8);
 }
 
 #[test]
@@ -157,4 +157,19 @@ fn negative_or_fractional_index_is_refused_not_item_zero() {
         assert_eq!(n.effects, before.effects, "index {index}");
         assert_eq!(n.exports, before.exports, "index {index}");
     }
+}
+
+/// A tilt is kept within its range, scales with the layer (the viewer moves away with it) and
+/// is written as CSS's own 3D transform about the layer's centre.
+#[test]
+fn perspective_is_clamped_scaled_and_written_as_css() {
+    let mut s = Session::new();
+    let r = rect(&mut s);
+    s.execute("effect.add", &json!({"ids": [r], "effect": {"type": "perspective", "tiltX": 200, "tiltY": -15, "distance": 600}})).unwrap();
+    let doc = s.doc().unwrap();
+    let css = code_for(doc, r, CodeLang::Css);
+    assert!(css.contains("perspective(600px) rotateY(-15deg) rotateX(80deg)"), "the tilt stops at 80: {css}");
+    s.execute("transform.scale", &json!({"ids": [r], "factor": 2})).unwrap();
+    let EffectKind::Perspective(p) = &s.doc().unwrap().node(r).unwrap().effects[0].kind else { panic!("not a perspective") };
+    assert!(p.distance > 1000.0, "twice the size, the viewer twice as far: {}", p.distance);
 }

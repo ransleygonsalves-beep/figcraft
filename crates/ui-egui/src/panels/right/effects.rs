@@ -5,6 +5,7 @@ use super::{
     moved_index, remove_flags, removed_index, style_picker, tr, trf, trn, vec2, widgets,
 };
 use crate::property_rows::PropertyKind;
+use figcraft_doc::Perspective;
 
 /// Draw the effect list with add/style/type/toggle/remove/reorder, open settings, and keep an
 /// open picker and settings flags aligned when rows move or are removed.
@@ -340,6 +341,37 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
             row(ui, 32.0, |ui| {
                 let ed = fx_field_in(app, ui, ids, i, "splay", Lead::Text(tr("Splay")), pct(g.splay), "%", half);
                 edit(app, ed, &|v| with(&|gl| gl.splay = unit(v)));
+            });
+        }
+        EffectKind::Perspective(pv) => {
+            let with = |f: &dyn Fn(&mut Perspective)| {
+                tweaked(e, |k| {
+                    if let EffectKind::Perspective(p) = k {
+                        f(p);
+                        *p = p.clamped();
+                    }
+                })
+            };
+            let pv = pv.clamped();
+            row(ui, 32.0, |ui| {
+                let ed =
+                    widgets::number_field(ui, Id::unique(("fx", "tiltX", i)), Lead::Text(tr("Top|tilt")), Some(pv.tilt_x.round()), "°", half, 1.0);
+                edit(app, ed, &|v| with(&|p| p.tilt_x = v));
+                let ed =
+                    widgets::number_field(ui, Id::unique(("fx", "tiltY", i)), Lead::Text(tr("Right|tilt")), Some(pv.tilt_y.round()), "°", half, 1.0);
+                edit(app, ed, &|v| with(&|p| p.tilt_y = v));
+            });
+            row(ui, 32.0, |ui| {
+                let ed = widgets::number_field(
+                    ui,
+                    Id::unique(("fx", "distance", i)),
+                    Lead::Text(tr("Distance")),
+                    Some(pv.distance.round()),
+                    "",
+                    ui.available_width(),
+                    10.0,
+                );
+                edit(app, ed, &|v| with(&|p| p.distance = v));
             });
         }
     }

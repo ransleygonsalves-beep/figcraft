@@ -424,7 +424,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "effect.add",
             "Add effect",
-            "{ids?, type? (dropShadow|innerShadow|layerBlur|backgroundBlur|noise|texture|glass), effect? {..}}",
+            "{ids?, type? (dropShadow|innerShadow|layerBlur|backgroundBlur|noise|texture|glass|perspective), effect? {..}}  perspective: {type: perspective, tiltX (degrees, positive leans the top away, ±80), tiltY (positive turns the right edge away), distance (document units, at least 50)}",
             true,
             effect_add
         ),

@@ -947,13 +947,14 @@ impl W<'_> {
         self.image(&pix, &view, opacity, None)
     }
 
-    /// Layers whose look SVG can't build (texture scatters their pixels, a progressive blur varies
+    /// Layers whose look SVG can't build (texture scatters their pixels, a tilt bends them, a progressive blur varies
     /// across them, noise over a blur depends on their order) are drawn by the renderer and
     /// embedded whole, over their backdrop effects. False when the layer isn't one of them (or
     /// can't be rendered): it is written as vectors.
     fn raster_whole(&mut self, id: NodeId, n: &Node, id_val: Option<&str>) -> bool {
         let has = |f: &dyn Fn(&EffectKind) -> bool| n.effects.iter().any(|e| e.visible && f(&e.kind));
-        let whole = has(&|k| matches!(k, EffectKind::Texture(_)))
+        // A tilt (perspective) is no SVG transform: the tilted pixels go in.
+        let whole = has(&|k| matches!(k, EffectKind::Texture(_) | EffectKind::Perspective(_)))
             || has(&|k| matches!(k, EffectKind::LayerBlur(b) if b.is_progressive()))
             || (has(&|k| matches!(k, EffectKind::Noise(_))) && has(&|k| matches!(k, EffectKind::LayerBlur(_))))
             // A group's inner shadows are cast by its layers' pixels, over them; an image fill's by
