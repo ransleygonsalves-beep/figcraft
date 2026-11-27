@@ -534,6 +534,11 @@ name = "English"
 "They aren't all frames, so they share one page." = "They aren't all frames, so they share one page."
 "{n} layers export as PDF. Put them in one file, or a file each?" = { one = "{n} layer exports as PDF. Put it in one file, or a file each?", other = "{n} layers export as PDF. Put them in one file, or a file each?" }
 "{n} separate PDF files" = { one = "{n} separate PDF file", other = "{n} separate PDF files" }
+"Have you had some water?" = "Have you had some water?"
+"Hydration check: off" = "Hydration check: off"
+"Hydration check: on" = "Hydration check: on"
+"I've had some" = "I've had some"
+"You've been designing for an hour. A glass of water helps you stay sharp." = "You've been designing for an hour. A glass of water helps you stay sharp."
 "⌘ click a padding field" = "⌘ click a padding field"
 "Ctrl+scroll" = "Ctrl+scroll"
 "Current name" = "Current name"

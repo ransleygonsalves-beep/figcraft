@@ -1382,6 +1382,14 @@ fn ui_set_styles(app: &mut FigApp, p: &Value) -> Result<(), String> {
     if let Some(v) = p.get("colorProfileDialog") {
         app.ui.color_profile = v.as_str().and_then(figcraft_color::ColorProfile::parse);
     }
+    // The water reminder, now (true) or answered (false), without waiting the hour.
+    if let Some(v) = p.get("waterDue").and_then(Value::as_bool) {
+        if v {
+            app.ui.water.due = true;
+        } else {
+            app.ui.water.answer(0.0);
+        }
+    }
     if let Some(v) = p.get("exportPreview").and_then(Value::as_bool) {
         app.ui.export_thumb = v;
     }

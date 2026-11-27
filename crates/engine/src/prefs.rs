@@ -90,6 +90,9 @@ pub struct Prefs {
     /// Reduce motion: the interface's own animations are off (the system's setting turns them off
     /// too). Prototype transitions still play.
     pub reduce_motion: bool,
+    /// After an hour with the app open, the interface turns blue and asks whether you've had some
+    /// water (an easter egg; off at the bottom of Help, About FigCraft).
+    pub water_reminder: bool,
     /// How large the whole interface is drawn, relative to the system's display scale: 1.0 is the
     /// system's own size, 1.25 a quarter larger (kept between [`UI_SCALE_MIN`] and
     /// [`UI_SCALE_MAX`]). The canvas zoom is separate.
@@ -193,6 +196,7 @@ impl Default for Prefs {
             language: "system".into(),
             user_name: cmd::comment::DEFAULT_AUTHOR.into(),
             reduce_motion: false,
+            water_reminder: true,
             ui_scale: 1.0,
             auto_save: false,
             start_on_home: false,

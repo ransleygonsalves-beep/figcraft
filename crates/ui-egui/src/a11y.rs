@@ -866,6 +866,14 @@ pub fn toggle(resp: &Response, tip: &str, on: bool) {
     });
 }
 
+/// Something that appears on its own and asks for attention (a reminder): announced as it shows.
+pub fn alert(resp: &Response, label: &str) {
+    node(resp, label, |n| {
+        n.set_role(Role::Alert);
+        n.set_live(accesskit::Live::Polite);
+    });
+}
+
 /// A status shown in place (a badge), with what it means.
 pub fn status(resp: &Response, label: &str, description: &str) {
     node(resp, label, |n| {
