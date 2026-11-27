@@ -76,8 +76,8 @@ pub(super) fn mp4_dialog(app: &mut FigApp, ctx: &Context) {
             if status["running"] != true {
                 app.ui.mp4 = None;
                 match status["error"].as_str() {
-                    Some(e) => app.toast(&trf("Couldn't export {name}: {error}", &[("name", &name), ("error", &e)])),
-                    None if status["done"] == true => app.toast(&trf("Exported {name}", &[("name", &name)])),
+                    Some(e) => app.toast(trf("Couldn't export {name}: {error}", &[("name", &name), ("error", &e)])),
+                    None if status["done"] == true => app.toast(trf("Exported {name}", &[("name", &name)])),
                     None => {}
                 }
                 return;
