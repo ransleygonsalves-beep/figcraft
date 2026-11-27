@@ -1058,6 +1058,23 @@ pub enum AccountReq {
     ResetPassword { id: u64 },
     /// This account restored version `id` of `file` (for the server's audit log).
     Restored { file: String, id: String },
+    /// The latest `limit` events of the server's audit log, newest first (an admin asks).
+    Activity { limit: u32 },
+}
+
+/// One event of the server's audit log as an admin reads it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityEntry {
+    /// When (Unix seconds).
+    pub time: i64,
+    /// What happened (`signed_in`, `member_changed`, …).
+    pub event: String,
+    /// The account's name and email, or empty when nobody was signed in.
+    pub who: String,
+    /// The address it came from.
+    pub ip: String,
+    /// The rest (`file: …, access: edit`).
+    pub detail: String,
 }
 
 /// An agent token as listed (never the token).
@@ -1174,6 +1191,7 @@ pub enum AccountReply {
         code: String,
         expires: i64,
     },
+    Activity(Vec<ActivityEntry>),
 }
 
 /// (days since 1970-01-01, seconds-of-day, nanos) → (proleptic Gregorian year, the same wall-clock

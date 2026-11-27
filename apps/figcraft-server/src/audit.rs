@@ -37,6 +37,20 @@ impl Audit {
         }
     }
 
+    /// The latest `limit` events, newest first (from the log, then the one before it when the log
+    /// has fewer). Lines that aren't events are skipped.
+    pub fn recent(&self, limit: usize) -> Vec<Value> {
+        let mut out = Vec::new();
+        for path in [self.path.clone(), self.path.with_extension("log.1")] {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            out.extend(text.lines().rev().filter_map(|l| serde_json::from_str::<Value>(l).ok()).take(limit - out.len()));
+            if out.len() >= limit {
+                break;
+            }
+        }
+        out
+    }
+
     fn append(&self, line: &Value) -> std::io::Result<()> {
         if std::fs::metadata(&self.path).is_ok_and(|m| m.len() > MAX_BYTES) {
             let old = self.path.with_extension("log.1");

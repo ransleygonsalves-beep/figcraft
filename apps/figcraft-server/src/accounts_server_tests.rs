@@ -327,6 +327,12 @@ fn agent_tokens_resets_and_the_audit_log_with_accounts_only() {
     for secret in [token.as_str(), code.as_str(), "a long password", "a new password"] {
         assert!(!log.contains(secret), "a secret in the audit log");
     }
+    // Admins read it in the app (newest first, with who by name); others can't.
+    let seen = ada.execute("account.activity", &json!({"server": url, "limit": 50})).unwrap();
+    let events = seen["events"].as_array().unwrap();
+    assert_eq!(events[0]["event"], "signed_in", "the latest first: Dee's sign-in with the new password");
+    assert!(events.iter().any(|e| e["event"] == "password_reset_issued" && e["who"].as_str().is_some_and(|w| w.starts_with("Ada"))));
+    assert!(again.execute("account.activity", &json!({"server": url})).unwrap_err().to_string().contains("only an admin"));
     drop((ada, dee, agent, again, raw));
     server.stop();
 }
