@@ -147,7 +147,13 @@ impl FigApp {
         self.ui.dark = dark;
         // New files take the theme's page colour (existing pages keep theirs).
         self.session.set_ui_dark(dark);
-        theme::apply_with(ctx, if dark { theme::Tokens::dark() } else { theme::Tokens::light() }, self.reduce_motion());
+        // The water reminder: blue once an hour has passed (see `water`), and a frame when it does.
+        if let Some(left) = self.ui.water.tick(self.session.prefs.water_reminder, ctx.input(|i| i.time)) {
+            crate::repaint_in(ctx, left);
+        }
+        let tokens = if dark { theme::Tokens::dark() } else { theme::Tokens::light() };
+        let tokens = if self.ui.water.due { crate::water::tint(tokens) } else { tokens };
+        theme::apply_with(ctx, tokens, self.reduce_motion());
         if self.worker.is_none() {
             self.worker = Some(render_worker::Worker::new(ctx.clone()));
         }
@@ -437,6 +443,7 @@ impl FigApp {
             self.toast(i18n::tr(notice));
         }
         self.toast_ui(&ctx);
+        crate::water::card(self, &ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field
         // next frame; while the panel isn't drawn (the interface hidden or minimized, the panel
         // closed in a narrow window) the rename waits for it without asking for frames.

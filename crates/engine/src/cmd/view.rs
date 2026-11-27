@@ -451,6 +451,17 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("pref.reduceMotion", "Reduce motion", "{on?}", false, |s, p| pref(s, p, |x| &mut x.reduce_motion)),
         spec!(
+            "pref.waterReminder",
+            "Water reminder",
+            "{on?}  after an hour with the app open, the interface turns blue and asks whether you've had some water, until answered (on by default)",
+            false,
+            |s, p| {
+                let r = pref(s, p, |x| &mut x.water_reminder);
+                s.prefs_unsaved = true;
+                r
+            }
+        ),
+        spec!(
             "pref.uiScale",
             "Interface size",
             "{scale? (a size from 0.75 to 3 relative to the system's display scale: 1 is the system's own size, so 1.25 is 125 %, not 125; outside the range it stops at the nearest end; \"auto\" is 1; omit: just read it)} → {scale}: how large the whole interface is drawn; the canvas zoom is separate",

@@ -224,7 +224,18 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             tab_strip(ui, &t, &AboutTab::ALL, AboutTab::label, &mut app.ui.about_tab);
             ui.add_space(12.0);
             match app.ui.about_tab {
-                AboutTab::About => about_body(ui, &t),
+                AboutTab::About => {
+                    about_body(ui, &t);
+                    // The water reminder's only switch: small, dim, at the very bottom.
+                    ui.add_space(14.0);
+                    let on = app.session.prefs.water_reminder;
+                    let label = if on { tr("Hydration check: on") } else { tr("Hydration check: off") };
+                    let r = ui.add(egui::Label::new(RichText::new(label).color(t.text_tertiary).font(regular(10.0))).sense(Sense::click()));
+                    crate::a11y::toggle(&r, label, on);
+                    if r.clicked() {
+                        app.run("pref.waterReminder", json!({}));
+                    }
+                }
                 AboutTab::Contributors => crate::credits::contributors_ui(ui),
                 AboutTab::Models => crate::credits::models_ui(ui),
             }
