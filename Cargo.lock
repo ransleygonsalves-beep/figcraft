@@ -2595,6 +2595,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "figcraft-video"
+version = "0.18.1"
+dependencies = [
+ "bytes",
+ "mp4",
+ "openh264",
+]
+
+[[package]]
 name = "figcraft-web"
 version = "0.18.1"
 dependencies = [
@@ -3457,7 +3466,7 @@ dependencies = [
  "rand_xoshiro",
  "serde_core",
  "version_check",
- "wide",
+ "wide 0.7.33",
 ]
 
 [[package]]
@@ -3945,6 +3954,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp4"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "num-rational",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "muda"
 version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4155,6 +4178,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -4542,6 +4566,26 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "openh264"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a30840cd2b2cd6ae39af2544f66adf55357f68e0e4938a096fe0e9f8f412b59"
+dependencies = [
+ "openh264-sys2",
+ "wide 1.7.1",
+]
+
+[[package]]
+name = "openh264-sys2"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8de206369120cab1be98e587adad1389e2ec00b63c62cdb3c13238000c1290a"
+dependencies = [
+ "libloading",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "openssl-probe"
@@ -5513,6 +5557,15 @@ name = "safe_arch"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
 dependencies = [
  "bytemuck",
 ]
@@ -7386,7 +7439,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
 dependencies = [
  "bytemuck",
- "safe_arch",
+ "safe_arch 0.7.4",
+]
+
+[[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch 1.2.0",
 ]
 
 [[package]]
