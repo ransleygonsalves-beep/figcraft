@@ -70,6 +70,9 @@
 > - **Smooth tool** in vector edit mode, and a smoother prototype presenter (opens at 100%).
 > - **Perspective effect**: tilt any layer as if seen at an angle (Effects ▸ + ▸ Perspective), for
 >   mockups such as a screen leaning back on a desk.
+> - **Video**: place MP4 and MOV videos (Windows and Mac play them with their own decoders, as
+>   browsers do), watch them play in the presenter, and export frames with videos or animated
+>   GIFs as an MP4 (Cisco's H.264 codec, downloaded once).
 > - **One PDF from several frames**: exporting several frames as PDF asks whether you want one
 >   PDF (a page per frame, in reading order) or a file each.
 >

@@ -20,6 +20,7 @@ mod load;
 mod open;
 mod save;
 mod version;
+mod video;
 
 pub(crate) use export::FORBIDDEN_FILE_NAME_CHARS;
 #[cfg(test)]
@@ -66,7 +67,7 @@ fn new_file(s: &mut Session, p: &Value, kind: FileKind) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut list = vec![
         spec!("file.new", "New design file", "{name?}", false, |s, p| new_file(s, p, FileKind::Design)),
         spec!(
             "file.newBoard",
@@ -352,7 +353,9 @@ pub fn specs() -> Vec<CommandSpec> {
             s.request_ui("home", json!({}));
             ok()
         }),
-    ]
+    ];
+    list.extend(video::specs());
+    list
 }
 
 /// [`export_bytes_with`] and what the export changed or left out (Android Vector Drawable only;

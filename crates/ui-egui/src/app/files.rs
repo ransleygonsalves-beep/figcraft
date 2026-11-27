@@ -82,9 +82,9 @@ impl FigApp {
 
     pub fn import_dialog(&mut self, place: bool) {
         let exts: &[&str] = if place {
-            &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]
+            &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "mov", "m4v"]
         } else {
-            &["penpot", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig", "jam", "sketch"]
+            &["penpot", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "mov", "m4v", "figcraft", "fig", "jam", "sketch"]
         };
         let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
         self.pick_file(title, exts, true, |app, file| {

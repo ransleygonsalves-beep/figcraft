@@ -48,6 +48,7 @@ publishing a release.
 | Several PDFs as one file (export asks) | `feat/pdf-one-file`: `export_panel::export_layers` (`PdfChoice`), `dialogs/pdf_choice.rs` |
 | Perspective effect (tilt a layer) | `feat/perspective-effect`: `figcraft_doc::Perspective`, `crates/render/src/perspective.rs` (draw flat, then warp) |
 | Presenter scroll/hover fixes, opens at 100% | `fix/present-scroll-hover-actual` |
+| Video: place MP4/MOV, play, Export as MP4 | `feat/video` (from `feat/remove-background`): `crates/video` (MP4 boxes; `Player` through the system decoder, else Cisco's OpenH264; `Writer`), `crates/render/src/video.rs` (frames in image fills, presenter clock), `crates/engine/src/video_export.rs` (codec download, export job), `cmd/file/video.rs`, `ui-egui/src/dialogs/mp4_export.rs` |
 
 User-facing docs for accounts: `docs/server.md#accounts-and-version-history`.
 
@@ -69,6 +70,20 @@ User-facing docs for accounts: `docs/server.md#accounts-and-version-history`.
 - Release builds read the repository variable `FIGCRAFT_DEFAULT_SERVER` (the team's `wss://` URL);
   unset, they have no default server rather than the public one.
 
+### Video: things to keep
+
+- Playback uses the operating system's decoder (Windows Media Foundation, macOS AVFoundation): what
+  browsers use, so B-frames and HEVC play. Cisco's OpenH264 is for writing MP4s, and plays only
+  H.264 without B-frames (the Linux fallback). FFmpeg is out (LGPL/GPL isn't on the licence list).
+- **The fork's one exception to `unsafe_code = "forbid"`:** `crates/video` denies it instead, and
+  only `src/system_windows.rs` and `src/system_macos.rs` allow it (`#![allow(unsafe_code)]`), each
+  `unsafe` block with a `// SAFETY:` note. Keep it there; nothing else in the fork uses `unsafe`.
+- Cisco's library is downloaded from Cisco only after the user allows it in the app (no command
+  allows it); each platform's `.bz2` SHA-256 is pinned in `video_export::codec::BUILD`, and the
+  bindings load only builds they know. Its notice must show where the download is offered:
+  "OpenH264 Video Codec provided by Cisco Systems, Inc."
+- The macOS decoder has only been compiled here, not run: check it on a Mac.
+
 ## Testing notes
 
 - The server's tests start real servers: `cargo test -p figcraft-server`. If a running
@@ -82,3 +97,7 @@ User-facing docs for accounts: `docs/server.md#accounts-and-version-history`.
   `account.publish`, …) and `ui.screenshot`. Injected clicks need move, down, up and move as
   separate `ui.input` calls.
 - Don't use real people's emails or names in tests or fixtures; use `example.com` addresses.
+- Video tests that need the codec read `FIGCRAFT_OPENH264` (the path to Cisco's library, e.g.
+  `openh264-2.6.0-win64.dll` unpacked from `http://ciscobinary.openh264.org/openh264-2.6.0-win64.dll.bz2`)
+  and skip without it. ffmpeg's `testsrc2` makes synthetic test videos (`-bf 3` for B-frames,
+  `libx265 -tag:v hvc1` for HEVC) to compare frames against.

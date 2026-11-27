@@ -24,6 +24,7 @@ figcraft-doc = { path = "crates/doc" }
 figcraft-layout = { path = "crates/layout" }
 figcraft-text = { path = "crates/text" }
 figcraft-pathops = { path = "crates/pathops" }
+figcraft-video = { path = "crates/video" }
 figcraft-render = { path = "crates/render" }
 figcraft-svg = { path = "crates/svg" }
 figcraft-pdf = { path = "crates/pdf" }

@@ -38,6 +38,8 @@ struct Exports {
     layers: BTreeSet<NodeId>,
     first: Option<NodeId>,
     name: Option<String>,
+    /// A video or animated GIF plays in the selection: it can be exported as an MP4.
+    moves: bool,
 }
 
 fn exports(doc: &Document, sel: &[NodeId]) -> Exports {
@@ -50,6 +52,10 @@ fn exports(doc: &Document, sel: &[NodeId]) -> Exports {
         text: sel.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_)))),
         first: jobs.first().map(|j| j.id),
         name: layers.first().and_then(|i| doc.node(*i)).map(|n| n.name.clone()),
+        #[cfg(not(target_arch = "wasm32"))]
+        moves: figcraft_engine::video_export::timing(doc, sel).is_some(),
+        #[cfg(target_arch = "wasm32")]
+        moves: false,
         layers,
     }
 }
@@ -57,7 +63,8 @@ fn exports(doc: &Document, sel: &[NodeId]) -> Exports {
 pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    let Exports { list, mixed, text, layers, first, name } = crate::selection_cache::cached(ui.ctx(), "exports", doc, sel, &[], || exports(doc, sel));
+    let Exports { list, mixed, text, layers, first, name, moves } =
+        crate::selection_cache::cached(ui.ctx(), "exports", doc, sel, &[], || exports(doc, sel));
     let tip = if mixed { tr("Replace mixed export settings") } else { tr("Add export setting") };
     if widgets::section_header(ui, tr("Export"), &[(Icon::Plus, tip)], list.is_empty()).is_some() {
         if mixed {
@@ -71,6 +78,9 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId
     }
     for (i, e) in list.iter().enumerate() {
         setting_row(app, ui, &ids, i, e, text, doc.color_profile);
+    }
+    if moves && wide_button(ui, tr("Export as MP4")) {
+        crate::dialogs::export_mp4(app, sel);
     }
     let Some(first) = first else { return };
     preview(app, ui, doc, first);
