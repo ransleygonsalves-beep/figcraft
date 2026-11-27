@@ -18,6 +18,7 @@ mod batch_rename;
 mod color_profile;
 mod export;
 mod menu_input;
+mod mp4_export;
 
 pub use batch_rename::BatchRenameUi;
 use batch_rename::batch_rename_dialog;
@@ -29,6 +30,9 @@ use export::export_dialog;
 pub(crate) use export::file_saved;
 pub use menu_input::MenuInput;
 use menu_input::menu_input_dialog;
+pub use mp4_export::Mp4Ui;
+pub(crate) use mp4_export::export_mp4;
+use mp4_export::mp4_dialog;
 pub mod branch_ui;
 pub mod credits;
 pub mod import_report;
@@ -408,6 +412,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         export_dialog(app, ctx);
     }
     color_profile_dialog(app, ctx);
+    mp4_dialog(app, ctx);
     crate::plugins_ui::show(app, ctx);
     crate::live::join_dialog(app, ctx);
     crate::live::publish_dialog(app, ctx);

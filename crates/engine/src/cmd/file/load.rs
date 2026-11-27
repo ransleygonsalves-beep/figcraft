@@ -124,7 +124,8 @@ fn load_any(
             font_notes.append(&mut notes); // Show missing-font details first in the UI toast.
             Ok((figcraft_format::Loaded { issues: font_notes, ..doc.into() }, true))
         }
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" => {
+        // Videos (MP4, QuickTime) become a layer with the video as its fill, like an image.
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "mp4" | "mov" | "m4v" => {
             let mut doc = Document::new(file_stem(name_hint));
             let page = doc.first_page().ok_or(EngineError::NoDocument)?;
             let (hash, w, h) = crate::cmd::create::add_readable_image(&mut doc, bytes.to_vec()).map_err(EngineError::Other)?;

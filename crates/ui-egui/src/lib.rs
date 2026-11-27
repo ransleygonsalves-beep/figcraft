@@ -588,6 +588,8 @@ pub struct UiState {
     pub pdf_print: figcraft_doc::PrintSettings,
     /// The Color profile dialog is open, with this profile chosen.
     pub color_profile: Option<figcraft_color::ColorProfile>,
+    /// Export as MP4: asking for the codec, or following the export.
+    pub mp4: Option<dialogs::Mp4Ui>,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
     /// The style picker's popover while it is open (its place survives a drag).
@@ -758,6 +760,7 @@ impl Default for UiState {
             export_preview: false,
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
+            mp4: None,
             style_picker: None,
             style_picker_popover: None,
             style_grid: false,
