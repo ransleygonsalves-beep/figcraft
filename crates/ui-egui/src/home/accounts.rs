@@ -500,7 +500,7 @@ fn share_dialog(app: &mut FigApp, ctx: &egui::Context, t: &Tokens) {
             }
         });
         ui.label(
-            RichText::new(tr("They need an account on this server first: invite them from People and invites."))
+            RichText::new(tr("They need an account on this server first: an admin invites them from the Admin window's Invites tab."))
                 .font(regular(11.0))
                 .color(t.text_secondary),
         );
