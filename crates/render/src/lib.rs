@@ -20,6 +20,7 @@ mod layer_budget;
 pub mod lod;
 pub mod paint;
 pub mod pattern;
+pub mod perspective;
 pub mod retained;
 pub mod shadow;
 
@@ -674,6 +675,8 @@ mod mask_bounds_tests;
 mod paint_behaviour_tests;
 #[cfg(test)]
 mod pan_bench_tests;
+#[cfg(test)]
+mod perspective_tests;
 #[cfg(test)]
 mod progressive_tests;
 #[cfg(test)]

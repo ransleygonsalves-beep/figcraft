@@ -890,6 +890,48 @@ impl Node {
     /// The page-space area this node paints itself under `world` (its children aside): its box
     /// grown by its strokes and glyphs, then by its effects (see [`Node::grow_by_effects`]).
     pub fn own_paint_bounds(&self, world: Affine) -> figcraft_geom::Rect {
+        let flat = self.flat_paint_bounds(world);
+        self.tilted(world, flat)
+    }
+
+    /// This node's visible perspective effect, if it has one (the first; the others are ignored).
+    pub fn perspective(&self) -> Option<&crate::props::Perspective> {
+        self.effects.iter().filter(|e| e.visible).find_map(|e| match &e.kind {
+            EffectKind::Perspective(p) => Some(p),
+            _ => None,
+        })
+    }
+
+    /// Where page-space area `r` (painted under `world`) is drawn once this node's perspective
+    /// tilts it: the box around the tilted area (`r` itself without one).
+    pub fn tilted(&self, world: Affine, r: figcraft_geom::Rect) -> figcraft_geom::Rect {
+        let Some(m) = self.page_perspective(world, r) else { return r };
+        let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)];
+        let pts: Vec<(f64, f64)> = corners.iter().filter_map(|c| crate::props::project3(&m, *c)).collect();
+        if pts.len() < 4 {
+            return r;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for (x, y) in pts {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        figcraft_geom::Rect::new(x0, y0, x1, y1)
+    }
+
+    /// This node's perspective as a page-space map under `world`, for an area `r` it paints, when
+    /// it has one: `world · tilt · world⁻¹`.
+    pub fn page_perspective(&self, world: Affine, r: figcraft_geom::Rect) -> Option<[f64; 9]> {
+        let p = self.perspective()?;
+        let inv = crate::props::invert3(&crate::props::affine3(world))?;
+        // How far `r` reaches past the box, in local units (the viewer stays in front of it all).
+        let scale = world.as_coeffs()[0].hypot(world.as_coeffs()[1]).max(1e-9);
+        let reach = ((r.width() - self.width * scale).max(r.height() - self.height * scale) / 2.0 / scale).max(0.0);
+        let tilt = p.matrix((self.width, self.height), reach);
+        Some(crate::props::mul3(&crate::props::mul3(&crate::props::affine3(world), &tilt), &inv))
+    }
+
+    /// [`Node::own_paint_bounds`] before a perspective tilts it.
+    fn flat_paint_bounds(&self, world: Affine) -> figcraft_geom::Rect {
         let o = self.outline_reach();
         let base = self.local_rect().inflate(o, o);
         let grown = self.grow_by_effects(figcraft_geom::transform_rect_bbox(world, base));

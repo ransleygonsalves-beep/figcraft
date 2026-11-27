@@ -27,7 +27,11 @@ impl Effect {
                 f(&mut n.color);
                 f(&mut n.secondary);
             }
-            EffectKind::LayerBlur { .. } | EffectKind::BackgroundBlur { .. } | EffectKind::Texture(_) | EffectKind::Glass(_) => {}
+            EffectKind::LayerBlur { .. }
+            | EffectKind::BackgroundBlur { .. }
+            | EffectKind::Texture(_)
+            | EffectKind::Glass(_)
+            | EffectKind::Perspective(_) => {}
         }
     }
 }

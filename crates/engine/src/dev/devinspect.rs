@@ -466,6 +466,10 @@ pub fn properties_with(doc: &Document, id: NodeId, fmt: ColorFormat) -> Vec<Sect
             EffectKind::Texture(t) => {
                 prop("Texture", format!("{} {}{}", grain(t.grain()), num(t.radius), if t.clip_to_shape { " clipped" } else { "" }))
             }
+            EffectKind::Perspective(p) => {
+                let p = p.clamped();
+                prop("Perspective", format!("tilt {}° {}° distance {}", num(p.tilt_x), num(p.tilt_y), num(p.distance)))
+            }
             EffectKind::Glass(g) => prop(
                 "Glass",
                 format!(

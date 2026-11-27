@@ -518,6 +518,10 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
                     // From the frost it draws with (an older file's past 100 draws at 100).
                     g.frost = (g.sanitized().frost * k).min(figcraft_doc::Glass::MAX_FROST);
                 }
+                // The viewer moves away as the layer grows, so it looks the same.
+                EffectKind::Perspective(p) => {
+                    p.distance = (p.distance * k).clamp(figcraft_doc::Perspective::MIN_DISTANCE, figcraft_doc::Perspective::MAX_DISTANCE)
+                }
             }
         }
         if let Some(l) = n.layout.as_mut() {

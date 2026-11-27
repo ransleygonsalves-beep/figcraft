@@ -430,7 +430,7 @@ fn subtree_outline_at(doc: &Document, n: &Node, depth: usize, stroke_only: bool)
     }
 }
 
-fn device_rect(xf: Affine, r: Rect) -> Rect {
+pub(crate) fn device_rect(xf: Affine, r: Rect) -> Rect {
     figcraft_geom::transform_rect_bbox(xf, r)
 }
 
@@ -575,7 +575,8 @@ pub fn effect_margin(n: &Node) -> f64 {
         })
         .map(finite)
         .fold(0.0, f64::max);
-    layer + others
+    // A tilt moves all of that again.
+    layer + others + finite(crate::perspective::reach(n))
 }
 
 /// Everything node `id` can paint, in page coordinates: its paint bounds, effects and glyphs of
@@ -621,7 +622,7 @@ fn int_rect(r: Rect, limit: (u32, u32)) -> Option<IntRect> {
 }
 
 /// The most a layer reaches past the view for its effects, in device pixels.
-const MAX_EFFECT_MARGIN_PX: f64 = 2048.0;
+pub(crate) const MAX_EFFECT_MARGIN_PX: f64 = 2048.0;
 
 thread_local! {
     /// How deep the layer being drawn on this thread is. A pattern fill draws its source inside the
@@ -667,7 +668,7 @@ pub fn draw_node(ctx: &Ctx, pix: &mut Pixmap, id: NodeId, parent_xf: Affine, dep
 }
 
 /// [`draw_node`] for a node already looked up.
-fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: usize) {
+pub(crate) fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: usize) {
     let id = n.id;
     if depth > crate::MAX_EXPORT_DEPTH || ctx.skip.contains(&id) {
         return;
@@ -691,7 +692,8 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     let dev = device_rect(xf, local);
     // Effects that read outside (blur) need a margin when culling. Absurd effects (a spread or
     // blur of millions of pixels) keep a sane layer: what lies further off reads as empty.
-    let blur_margin = (effect_margin(n) * ctx.scale).min(MAX_EFFECT_MARGIN_PX);
+    // A tilted layer can land far from its box at any zoom: its reach isn't capped.
+    let blur_margin = (effect_margin(n) * ctx.scale).min(MAX_EFFECT_MARGIN_PX).max(crate::perspective::reach(n) * ctx.scale);
     let view = Rect::new(0.0, 0.0, f64::from(pw), f64::from(ph)).inflate(blur_margin, blur_margin);
     if dev.intersect(view).is_zero_area() && !(dev.width() == 0.0 || dev.height() == 0.0) {
         return;
@@ -699,6 +701,10 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     if outline {
         draw_outline(&Ctx { outline_mode: true, ..*ctx }, pix, n, xf, depth);
         return;
+    }
+    // Seen at an angle: drawn flat on a surface of its own, then tilted onto this one.
+    if n.perspective().is_some() {
+        return crate::perspective::draw(ctx, pix, n, parent_xf, local, depth);
     }
     if ctx.lod && dev.width().max(dev.height()) < lod::TINY_PX && lod::splattable_within(ctx.doc, n, 0, Some(ctx.bounds)).0 {
         lod::splat_subtree(ctx, pix, n, xf, None, 1.0, depth);
