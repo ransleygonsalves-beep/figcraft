@@ -48,16 +48,21 @@ pub struct Player {
     inner: Inner,
 }
 
+#[cfg(target_os = "macos")]
+use crate::system_macos::SystemVideo;
+#[cfg(windows)]
+use crate::system_windows::SystemVideo;
+
 enum Inner {
-    #[cfg(windows)]
-    System(crate::system_windows::SystemVideo),
+    #[cfg(any(windows, target_os = "macos"))]
+    System(SystemVideo),
     Codec(Box<H264Player>),
 }
 
 impl Player {
     pub fn new(clip: Clip) -> Result<Player, String> {
-        #[cfg(windows)]
-        match crate::system_windows::SystemVideo::open(clip.bytes.clone()) {
+        #[cfg(any(windows, target_os = "macos"))]
+        match SystemVideo::open(clip.bytes.clone()) {
             Ok(v) => return Ok(Player { clip, inner: Inner::System(v) }),
             Err(e) if clip.needs_system => return Err(e),
             Err(_) => {}
@@ -87,7 +92,7 @@ impl Player {
     /// Frame `k` in showing order.
     pub fn frame(&mut self, k: usize) -> Result<Frame, String> {
         match &mut self.inner {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             // The middle of the frame's time, so rounding never lands on its neighbour.
             Inner::System(v) => v.frame_at((k as f64 + 0.5) / self.clip.info.fps),
             Inner::Codec(p) => p.frame(k),

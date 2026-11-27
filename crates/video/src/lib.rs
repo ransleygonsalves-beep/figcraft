@@ -15,6 +15,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod codec;
 mod container;
+#[cfg(target_os = "macos")]
+mod system_macos;
 #[cfg(windows)]
 mod system_windows;
 
