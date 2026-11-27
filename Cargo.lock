@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-video"
-version = "0.18.1"
+version = "0.19.2"
 dependencies = [
  "block2 0.6.2",
  "bytes",
