@@ -401,9 +401,47 @@ pub(crate) fn wide_button(ui: &mut Ui, label: &str) -> bool {
     clicked
 }
 
+/// Several layers about to export as PDF with the same setting: what one combined PDF takes.
+#[derive(Clone, Debug)]
+pub struct PdfChoice {
+    /// What was asked to export, and whether as the Inspect tab's assets.
+    pub ids: Vec<NodeId>,
+    pub assets: bool,
+    /// The layers the PDFs would be of, in reading order (top to bottom, then left to right).
+    pub ordered: Vec<NodeId>,
+    pub setting: ExportSetting,
+    /// They are all frames: one page each (else they share one page).
+    pub frames: bool,
+    /// The combined file's suggested name.
+    pub file: String,
+}
+
 /// Export `ids` with their export settings (`assets`: the Inspect tab's assets in and under them):
-/// one file through a save dialog, several into a folder.
+/// one file through a save dialog, several into a folder. Several PDFs with the same setting ask
+/// first whether to put them in one PDF instead ([`crate::dialogs`]' PDF choice).
 pub(crate) fn export_layers(app: &mut FigApp, ids: &[NodeId], assets: bool) {
+    let choice = app.session.doc().ok().and_then(|doc| {
+        let jobs = if assets { figcraft_engine::devinspect::asset_jobs(doc, ids) } else { export_jobs(doc, ids) };
+        let setting = jobs.first()?.setting.clone();
+        let one_kind = jobs.len() > 1 && setting.format == ExportFormat::Pdf && jobs.iter().all(|j| j.setting == setting);
+        if !one_kind {
+            return None;
+        }
+        let mut ordered: Vec<(NodeId, figcraft_geom::Rect)> = jobs.iter().map(|j| (j.id, doc.world_bounds(j.id).unwrap_or_default())).collect();
+        ordered.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0).then(a.1.x0.total_cmp(&b.1.x0)));
+        let file = format!("{}{}.pdf", doc.name, setting.file_suffix());
+        let frames = ordered.iter().all(|(i, _)| doc.node(*i).is_some_and(|n| n.kind.is_frame_like()));
+        Some(PdfChoice { ids: ids.to_vec(), assets, ordered: ordered.into_iter().map(|(i, _)| i).collect(), setting, frames, file })
+    });
+    if choice.is_some() {
+        app.ui.pdf_choice = choice;
+        return;
+    }
+    export_each(app, ids, assets);
+}
+
+/// [`export_layers`] without asking: each layer's files as their settings say.
+pub(crate) fn export_each(app: &mut FigApp, ids: &[NodeId], assets: bool) {
     let jobs = match app.session.doc() {
         Ok(doc) if assets => figcraft_engine::devinspect::asset_jobs(doc, ids),
         Ok(doc) => export_jobs(doc, ids),

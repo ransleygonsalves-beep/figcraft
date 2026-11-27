@@ -221,6 +221,8 @@ mod panels;
 #[cfg(test)]
 mod paste_image_tests;
 #[cfg(test)]
+mod pdf_choice_tests;
+#[cfg(test)]
 mod pen_mode_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -602,6 +604,9 @@ pub struct UiState {
     pub pdf_print: figcraft_doc::PrintSettings,
     /// The Color profile dialog is open, with this profile chosen.
     pub color_profile: Option<figcraft_color::ColorProfile>,
+    /// Several layers are about to export as PDF: one file or a file each? (see
+    /// [`export_panel::export_layers`]).
+    pub pdf_choice: Option<export_panel::PdfChoice>,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
     /// The style picker's popover while it is open (its place survives a drag).
@@ -778,6 +783,7 @@ impl Default for UiState {
             export_preview: false,
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
+            pdf_choice: None,
             style_picker: None,
             style_picker_popover: None,
             style_grid: false,

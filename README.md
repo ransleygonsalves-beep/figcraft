@@ -70,6 +70,8 @@
 > - **Smooth tool** in vector edit mode, and a smoother prototype presenter (opens at 100%).
 > - **Perspective effect**: tilt any layer as if seen at an angle (Effects ▸ + ▸ Perspective), for
 >   mockups such as a screen leaning back on a desk.
+> - **One PDF from several frames**: exporting several frames as PDF asks whether you want one
+>   PDF (a page per frame, in reading order) or a file each.
 >
 > **Get the app:** the [Releases](https://github.com/ransleygonsalves-beep/figcraft/releases) page
 > has Windows (`.msi`, portable `.zip`) and macOS (`.dmg`) builds, the browser build
