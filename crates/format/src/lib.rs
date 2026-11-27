@@ -176,7 +176,12 @@ fn stored_dimensions(bytes: &[u8]) -> Result<(u32, u32), craft_image_codecs::Cod
 
 /// Register encoded image bytes with the document; returns the hash and pixel size.
 pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32), FormatError> {
-    let (w, h) = stored_dimensions(&bytes).map_err(|e| FormatError::Corrupt(format!("unsupported image: {e}")))?;
+    // A video (an MP4) is kept like an image: its frames fill the layer.
+    let (w, h) = if figcraft_video::is_mp4(&bytes) {
+        figcraft_video::probe(&bytes).map(|i| (i.width, i.height)).map_err(FormatError::Corrupt)?
+    } else {
+        stored_dimensions(&bytes).map_err(|e| FormatError::Corrupt(format!("unsupported image: {e}")))?
+    };
     let hash = image_hash(&bytes);
     doc.images.insert(hash.clone(), ImageData { bytes: Arc::new(bytes), width: w, height: h });
     Ok((hash, w, h))
@@ -184,7 +189,11 @@ pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32
 
 /// Image bytes with their pixel size (0×0 when they can't be decoded).
 pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
-    let (w, h) = stored_dimensions(&data).unwrap_or((0, 0));
+    let (w, h) = if figcraft_video::is_mp4(&data) {
+        figcraft_video::probe(&data).map(|i| (i.width, i.height)).unwrap_or((0, 0))
+    } else {
+        stored_dimensions(&data).unwrap_or((0, 0))
+    };
     ImageData { bytes: Arc::new(data), width: w, height: h }
 }
 

@@ -97,6 +97,16 @@ fn cache() -> &'static Mutex<PixmapCache> {
     C.get_or_init(|| Mutex::new(PixmapCache::default()))
 }
 
+/// [`fkey`] for the video frames' cache.
+pub(crate) fn filters_key(f: &ImageFilters) -> [i32; 7] {
+    fkey(f)
+}
+
+/// [`finish`] for a video frame (sRGB, like a GIF's).
+pub(crate) fn finish_frame(p: &mut Pixmap, filters: &ImageFilters, profile: ColorProfile) {
+    finish(p, filters, profile);
+}
+
 fn fkey(f: &ImageFilters) -> [i32; 7] {
     let q = |v: f32| (v * 1000.0).round() as i32;
     [q(f.exposure), q(f.contrast), q(f.saturation), q(f.temperature), q(f.tint), q(f.highlights), q(f.shadows)]
@@ -358,6 +368,10 @@ pub(crate) fn display_side(long: u32, side: f64) -> u32 {
 
 /// [`get`] scaled down to at most `max_side` wide and tall.
 fn get_within(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile, max_side: u32) -> Option<Arc<Pixmap>> {
+    // A video shows its first frame wherever a still is drawn.
+    if crate::video::is_video(data) {
+        return crate::video::frame(hash, data, filters, profile, 0.0);
+    }
     let key = (hash.to_string(), fkey(filters), profile, max_side);
     if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
@@ -393,6 +407,11 @@ pub struct Animation {
 }
 
 impl Animation {
+    /// One loop's length in seconds.
+    pub fn duration(&self) -> f64 {
+        self.ends.last().copied().unwrap_or(0.0)
+    }
+
     /// The frame showing `t` seconds in (the animation loops) and the seconds until the next one.
     pub fn at(&self, t: f64) -> (usize, f64) {
         let total = self.ends.last().copied().unwrap_or(0.0);
@@ -486,6 +505,9 @@ pub fn frame_at(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, pr
     if t.is_nan() || t <= 0.0 {
         return None;
     }
+    if crate::video::is_video(data) {
+        return crate::video::frame(hash, data, filters, profile, t);
+    }
     let a = animation(hash, data, filters, profile)?;
     match a.at(t).0 {
         0 => None,
@@ -502,6 +524,11 @@ pub fn animation_clock(doc: &Document, root: NodeId, t: f64) -> Option<(u64, f64
     for n in doc.subtree(root).into_iter().filter_map(|id| doc.node(id)).filter(|n| n.visible) {
         for p in n.fills.iter().chain(&n.strokes).filter(|p| p.visible) {
             if let PaintKind::Image(img) = &p.kind
+                && let Some((i, next)) = crate::video::clock(&img.image, doc.images.get(&img.image), t)
+            {
+                let (key, soonest) = clock.unwrap_or((0, f64::INFINITY));
+                clock = Some((key.wrapping_mul(31).wrapping_add(i as u64 + 1), soonest.min(next)));
+            } else if let PaintKind::Image(img) = &p.kind
                 && let Some(a) = animation(&img.image, doc.images.get(&img.image), &img.filters, doc.color_profile)
             {
                 let (i, next) = a.at(t);
@@ -558,6 +585,9 @@ pub fn apply_filters(p: &mut Pixmap, f: &ImageFilters) {
 
 /// Read an image's pixel size without keeping the decode.
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if figcraft_video::is_mp4(bytes) {
+        return figcraft_video::probe(bytes).ok().map(|i| (i.width, i.height));
+    }
     craft_image_codecs::probe_size(bytes).ok()
 }
 

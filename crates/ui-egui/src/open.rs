@@ -5,7 +5,7 @@ use super::{OsStr, Path, theme};
 
 /// The file types File ▸ Open and a drop on the home screen open.
 pub(crate) const OPEN_EXTENSIONS: &[&str] =
-    &["figcraft", "fig", "jam", "penpot", "sketch", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
+    &["figcraft", "fig", "jam", "penpot", "sketch", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "mov", "m4v"];
 
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {

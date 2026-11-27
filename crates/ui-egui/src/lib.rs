@@ -607,6 +607,8 @@ pub struct UiState {
     /// Several layers are about to export as PDF: one file or a file each? (see
     /// [`export_panel::export_layers`]).
     pub pdf_choice: Option<export_panel::PdfChoice>,
+    /// Export as MP4: asking for the codec, or following the export.
+    pub mp4: Option<dialogs::Mp4Ui>,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
     /// The style picker's popover while it is open (its place survives a drag).
@@ -784,6 +786,7 @@ impl Default for UiState {
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
             pdf_choice: None,
+            mp4: None,
             style_picker: None,
             style_picker_popover: None,
             style_grid: false,
