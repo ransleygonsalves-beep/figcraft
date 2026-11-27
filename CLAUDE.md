@@ -49,6 +49,7 @@ publishing a release.
 | Perspective effect (tilt a layer) | `feat/perspective-effect`: `figcraft_doc::Perspective`, `crates/render/src/perspective.rs` (draw flat, then warp) |
 | Presenter scroll/hover fixes, opens at 100% | `fix/present-scroll-hover-actual` |
 | Video: place MP4/MOV, play, Export as MP4 | `feat/video` (from `feat/remove-background`): `crates/video` (MP4 boxes; `Player` through the system decoder, else Cisco's OpenH264; `Writer`), `crates/render/src/video.rs` (frames in image fills, presenter clock), `crates/engine/src/video_export.rs` (codec download, export job), `cmd/file/video.rs`, `ui-egui/src/dialogs/mp4_export.rs` |
+| Water reminder (easter egg: blue after an hour, water card) | `feat/water-reminder`: `crates/ui-egui/src/water.rs` (clock, `tint`, the card and its water), off switch at the bottom of Help ▸ About (`pref.waterReminder`); kept out of the README on purpose; `ui.set {waterDue}` shows it at once |
 
 User-facing docs for accounts: `docs/server.md#accounts-and-version-history`.
 

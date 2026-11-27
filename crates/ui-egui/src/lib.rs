@@ -33,6 +33,7 @@ pub mod tabs;
 pub mod theme;
 pub mod toolbar;
 pub mod ui_scale;
+pub mod water;
 pub mod widgets;
 pub mod windows;
 
@@ -609,6 +610,8 @@ pub struct UiState {
     pub pdf_choice: Option<export_panel::PdfChoice>,
     /// Export as MP4: asking for the codec, or following the export.
     pub mp4: Option<dialogs::Mp4Ui>,
+    /// The water reminder's clock (see [`water`]).
+    pub water: water::Water,
     /// The open style picker.
     pub style_picker: Option<style_picker::Picker>,
     /// The style picker's popover while it is open (its place survives a drag).
@@ -787,6 +790,7 @@ impl Default for UiState {
             color_profile: None,
             pdf_choice: None,
             mp4: None,
+            water: water::Water::default(),
             style_picker: None,
             style_picker_popover: None,
             style_grid: false,
