@@ -682,6 +682,116 @@ impl Default for Glass {
     }
 }
 
+/// Perspective: the layer, with all it paints, seen at an angle, as if it were a card tilted
+/// away from the viewer. It tilts about its centre lines and is drawn from a viewpoint `distance`
+/// in front of its centre; its edit handles and bounds for layout stay where they were.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Perspective {
+    /// Tilt about the horizontal centre line, in degrees: positive leans the top edge away
+    /// ([`Self::MAX_TILT`] either way).
+    #[serde(alias = "tiltX")]
+    pub tilt_x: f64,
+    /// Tilt about the vertical centre line, in degrees: positive turns the right edge away.
+    #[serde(alias = "tiltY")]
+    pub tilt_y: f64,
+    /// How far the viewer is from the layer's centre (document units): nearer looks steeper. At
+    /// least [`Self::MIN_DISTANCE`], and never closer than the tilted layer's far side allows.
+    pub distance: f64,
+}
+
+impl Default for Perspective {
+    fn default() -> Self {
+        Self { tilt_x: 20.0, tilt_y: 0.0, distance: 1000.0 }
+    }
+}
+
+impl Perspective {
+    /// The steepest tilt either way (degrees): further, the layer would be seen edge on.
+    pub const MAX_TILT: f64 = 80.0;
+    pub const MIN_DISTANCE: f64 = 50.0;
+    pub const MAX_DISTANCE: f64 = 100_000.0;
+
+    /// The settings as drawn: tilts within [`Self::MAX_TILT`], the distance within its range
+    /// (anything not finite reads as the default's).
+    pub fn clamped(&self) -> Perspective {
+        let d = Perspective::default();
+        let ok = |v: f64, dflt: f64| if v.is_finite() { v } else { dflt };
+        Perspective {
+            tilt_x: ok(self.tilt_x, d.tilt_x).clamp(-Self::MAX_TILT, Self::MAX_TILT),
+            tilt_y: ok(self.tilt_y, d.tilt_y).clamp(-Self::MAX_TILT, Self::MAX_TILT),
+            distance: ok(self.distance, d.distance).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE),
+        }
+    }
+
+    /// The projective map (row-major 3×3, acting on `(x, y, 1)`) from a `size` layer's local
+    /// coordinates to where it is drawn tilted, about the layer's centre. `reach` is how far
+    /// past its box it paints: the viewer stays far enough in front of all of that.
+    pub fn matrix(&self, size: (f64, f64), reach: f64) -> [f64; 9] {
+        let p = self.clamped();
+        let (cx, cy) = (size.0 / 2.0, size.1 / 2.0);
+        // Positive tilts lean the top and the right edge away.
+        let (a, b) = ((-p.tilt_x).to_radians(), (-p.tilt_y).to_radians());
+        let r = (cx.abs() + reach.max(0.0)).hypot(cy.abs() + reach.max(0.0));
+        let d = if r.is_finite() { p.distance.max(r * 1.25) } else { p.distance };
+        let (sa, ca, sb, cb) = (a.sin(), a.cos(), b.sin(), b.cos());
+        // Rotate (u, v, 0) about x by a, then about y by b; project from `d` in front.
+        let h = [cb, sa * sb, 0.0, 0.0, ca, 0.0, -sb / d, sa * cb / d, 1.0];
+        let to = [1.0, 0.0, cx, 0.0, 1.0, cy, 0.0, 0.0, 1.0];
+        let from = [1.0, 0.0, -cx, 0.0, 1.0, -cy, 0.0, 0.0, 1.0];
+        mul3(&mul3(&to, &h), &from)
+    }
+}
+
+/// `a · b` for row-major 3×3 matrices.
+pub fn mul3(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
+    let mut m = [0.0; 9];
+    for r in 0..3 {
+        for c in 0..3 {
+            m[r * 3 + c] = (0..3).map(|k| a[r * 3 + k] * b[k * 3 + c]).sum();
+        }
+    }
+    m
+}
+
+/// The inverse of a row-major 3×3 matrix, when it has one.
+pub fn invert3(m: &[f64; 9]) -> Option<[f64; 9]> {
+    let [a, b, c, d, e, f, g, h, i] = *m;
+    let (x, y, z) = (e * i - f * h, f * g - d * i, d * h - e * g);
+    let det = a * x + b * y + c * z;
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let k = 1.0 / det;
+    Some([
+        x * k,
+        (c * h - b * i) * k,
+        (b * f - c * e) * k,
+        y * k,
+        (a * i - c * g) * k,
+        (c * d - a * f) * k,
+        z * k,
+        (b * g - a * h) * k,
+        (a * e - b * d) * k,
+    ])
+}
+
+/// `m` applied to point `(x, y)`, when it doesn't land at infinity (behind the viewer).
+pub fn project3(m: &[f64; 9], (x, y): (f64, f64)) -> Option<(f64, f64)> {
+    let w = m[6] * x + m[7] * y + m[8];
+    if !(w.is_finite() && w > 1e-9) {
+        return None;
+    }
+    let (px, py) = ((m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w);
+    (px.is_finite() && py.is_finite()).then_some((px, py))
+}
+
+/// An affine map as a row-major 3×3 matrix.
+pub fn affine3(xf: figcraft_geom::Affine) -> [f64; 9] {
+    let [a, b, c, d, e, f] = xf.as_coeffs();
+    [a, c, e, b, d, f, 0.0, 0.0, 1.0]
+}
+
 /// `deg` (finite) as the same direction within -180 (exclusive) to 180 degrees.
 fn wrap_degrees(deg: f64) -> f64 {
     // `+ 0.0`: -0 reads as 0, so a saved file says 0.
@@ -855,6 +965,8 @@ pub enum EffectKind {
     Texture(Texture),
     /// The backdrop through curved glass.
     Glass(Glass),
+    /// The layer seen at an angle.
+    Perspective(Perspective),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -871,7 +983,7 @@ fn yes() -> bool {
 
 impl Effect {
     /// Effect types in the order the Design panel lists them: (label, type name).
-    pub const TYPES: [(&str, &str); 7] = [
+    pub const TYPES: [(&str, &str); 8] = [
         ("Drop shadow", "dropShadow"),
         ("Inner shadow", "innerShadow"),
         ("Layer blur", "layerBlur"),
@@ -879,6 +991,7 @@ impl Effect {
         ("Noise", "noise"),
         ("Texture", "texture"),
         ("Glass", "glass"),
+        ("Perspective", "perspective"),
     ];
 
     fn of(kind: EffectKind) -> Self {
@@ -905,6 +1018,9 @@ impl Effect {
     pub fn glass() -> Self {
         Self::of(EffectKind::Glass(Glass::default()))
     }
+    pub fn perspective() -> Self {
+        Self::of(EffectKind::Perspective(Perspective::default()))
+    }
 
     /// A new effect of a type named like `dropShadow`, `drop shadow` or `DROP_SHADOW` (`blur` is
     /// a layer blur), with its defaults.
@@ -917,6 +1033,7 @@ impl Effect {
             "noise" => Self::noise(),
             "texture" => Self::texture(),
             "glass" => Self::glass(),
+            "perspective" | "tilt" => Self::perspective(),
             _ => return None,
         })
     }
@@ -930,6 +1047,7 @@ impl Effect {
             EffectKind::Noise(_) => "Noise",
             EffectKind::Texture(_) => "Texture",
             EffectKind::Glass(_) => "Glass",
+            EffectKind::Perspective(_) => "Perspective",
         }
     }
     /// How far outside the node's bounds this effect can paint (a shadow's spread at a sharp

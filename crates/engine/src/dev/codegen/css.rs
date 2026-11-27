@@ -156,8 +156,22 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
     // Rotation turns counter-clockwise about the top-left corner (the position given); CSS
     // rotate turns clockwise.
     let rot = figcraft_geom::rotation_degrees(n.transform);
+    let mut transform = Vec::new();
     if rot.abs() > 0.01 && rot.is_finite() {
-        put("transform", format!("rotate({}deg)", num(-rot)));
+        transform.push(format!("rotate({}deg)", num(-rot)));
+    }
+    // A perspective tilts about the layer's centre, within its rotation: CSS's 3D transforms do the
+    // same (they apply right to left).
+    if let Some(p) = n.perspective().map(figcraft_doc::Perspective::clamped) {
+        let (cx, cy) = (num(n.width / 2.0), num(n.height / 2.0));
+        transform.push(format!("translate({cx}px, {cy}px)"));
+        transform.push(format!("perspective({}px)", num(p.distance)));
+        transform.push(format!("rotateY({}deg)", num(p.tilt_y)));
+        transform.push(format!("rotateX({}deg)", num(p.tilt_x)));
+        transform.push(format!("translate(-{cx}px, -{cy}px)"));
+    }
+    if !transform.is_empty() {
+        put("transform", transform.join(" "));
         put("transform-origin", "top left".into());
     }
     if matches!(n.kind, NodeKind::Text(_)) {
