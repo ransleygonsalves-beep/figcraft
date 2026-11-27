@@ -443,10 +443,16 @@ pub(crate) fn add_readable_image(doc: &mut Document, bytes: Vec<u8>) -> std::res
     let (hash, w, h) = figcraft_format::add_image(doc, bytes).map_err(|e| e.to_string())?;
     let pixels = figcraft_render::images::get(&hash, doc.images.get(&hash), &ImageFilters::default(), doc.color_profile);
     if pixels.is_none() {
+        let video = figcraft_render::video::is_video(doc.images.get(&hash));
+        let why = if video { figcraft_render::video::why_not(&hash, doc.images.get(&hash)) } else { None };
         if !known {
             doc.images.remove(&hash);
         }
-        return Err("this image can't be read: the file is damaged or too large".into());
+        return Err(match (video, why) {
+            (true, Some(why)) => format!("this video can't be played here: {why}"),
+            (true, None) => "this video can't be played here".into(),
+            _ => "this image can't be read: the file is damaged or too large".into(),
+        });
     }
     Ok((hash, w, h))
 }
@@ -512,7 +518,8 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     let w = num(p, "width").unwrap_or(placed_w);
     let h = num(p, "height").unwrap_or(if num(p, "width").is_some() { w * f64::from(ih) / f64::from(iw).max(1.0) } else { placed_h });
     let nid = doc.alloc_id();
-    let name = string(p, "name").unwrap_or_else(|| "Image".into());
+    let video = figcraft_render::video::is_video(doc.images.get(&hash));
+    let name = string(p, "name").unwrap_or_else(|| if video { "Video".into() } else { "Image".into() });
     let mut node = Node::new(nid, NodeKind::Rectangle, name, w, h);
     node.transform = figcraft_geom::Affine::translate((num_or(p, "x", 0.0), num_or(p, "y", 0.0)));
     node.fills = vec![Paint::image(hash.clone(), mode)];

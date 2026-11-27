@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 figcraft-doc = { workspace = true }
+figcraft-video = { workspace = true }
 figcraft-pathops = { workspace = true }
 figcraft-layout = { workspace = true }
 serde = { workspace = true }

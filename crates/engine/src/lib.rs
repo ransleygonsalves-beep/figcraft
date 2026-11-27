@@ -27,6 +27,10 @@ pub mod measure;
 pub mod proto_run;
 mod selection;
 mod sharing;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod video_export;
+#[cfg(test)]
+mod video_export_tests;
 pub use assets::components;
 pub use assets::library;
 pub use assets::library_server;

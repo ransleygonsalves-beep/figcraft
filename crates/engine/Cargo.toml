@@ -9,6 +9,7 @@ description = "FigCraft engine: sessions, undo history, the command registry eve
 workspace = true
 
 [dependencies]
+figcraft-video = { workspace = true }
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }
@@ -40,6 +41,8 @@ craft-font-store = { workspace = true, features = ["bundled-index"] }
 craft-font-catalog = { workspace = true }
 # Remove background: the model's download (craft-ai's fetch) and its inference (tract).
 craft-ai = { workspace = true }
+# Unpacks Cisco's OpenH264 download (bzip2; MIT OR Apache-2.0, pure Rust).
+bzip2-rs = "0.1.2"
 tract-onnx = { workspace = true }
 tract-linalg = { workspace = true }
 

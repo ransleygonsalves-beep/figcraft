@@ -22,6 +22,7 @@ pub mod paint;
 pub mod pattern;
 pub mod retained;
 pub mod shadow;
+pub mod video;
 
 pub use dots::Dots;
 pub use draw::{at_layer_depth, layer_depth, node_outline, paint_bounds, stroke_fill, subtree_outline, ts_path};
